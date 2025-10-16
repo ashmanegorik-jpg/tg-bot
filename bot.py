@@ -1,183 +1,398 @@
-# bot.py
-import os, csv, re
+#!/usr/bin/env python3
+# reseller_bot_csv.py  — версия для WEBHOOK (Render)
+
+import os
+import csv
+import re
 from datetime import datetime
-from decimal import Decimal, getcontext
+from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ====== общие настройки ======
-getcontext().prec = 28
+# ========== НАСТРОЙКИ ==========
+API_TOKEN = os.getenv("BOT_TOKEN")  # ВАЖНО: читаем BOT_TOKEN (как в Render)
+DATA_CSV = os.path.join(os.path.dirname(__file__), "inventory.csv")
+COMMISSION = 0.06  # 6% (3% продажа + 3% вывод)
+# ==============================
 
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    raise RuntimeError("BOT_TOKEN env var is not set")
+if not API_TOKEN:
+    raise RuntimeError("Environment variable BOT_TOKEN is not set")
 
-bot = Bot(token=TOKEN, parse_mode="HTML")
+bot = Bot(token=API_TOKEN, parse_mode="HTML")
 dp = Dispatcher(bot)
 
-BASE_DIR = os.path.dirname(__file__)
-DATA_CSV = os.path.join(BASE_DIR, "inventory.csv")
-
-COMMISSION = Decimal("0.06")    # комиссия площадки 6%
-BRAND = "Stirka"
-
+# Создаём CSV если его нет
 FIELDNAMES = [
-    "id", "source_text", "game", "account_desc",
-    "buy_price", "status", "min_sale_for_1", "notes",
+    "id", "source_text", "game", "account_desc", "buy_price",
+    "buy_date", "status", "min_sale_for_target", "notes",
     "sell_price", "sell_date", "net_profit"
 ]
 
-def _ensure_csv():
-    if not os.path.exists(DATA_CSV):
-        with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=FIELDNAMES).writeheader()
+if not os.path.exists(DATA_CSV):
+    with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer.writeheader()
 
+# ---- Утилиты для CSV ----
 def read_rows():
-    _ensure_csv()
-    with open(DATA_CSV, "r", newline="", encoding="utf-8") as f:
+    with open(DATA_CSV, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
 def write_rows(rows):
     with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        w.writeheader()
-        w.writerows(rows)
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(rows)
 
 def next_id(rows):
-    return 1 if not rows else max(int(r["id"]) for r in rows) + 1
+    if not rows:
+        return 1
+    return max(int(r["id"]) for r in rows) + 1
 
-def calc_min_sale_for_profit(buy_price: Decimal, target_profit: Decimal) -> Decimal:
-    if buy_price is None:
-        buy_price = Decimal("0")
-    price = (buy_price + target_profit) / (Decimal("1") - COMMISSION)
-    return price.quantize(Decimal("0.01"))
+def to_decimal(s):
+    """Преобразует строку с ',' или '.' в Decimal, убирает пробелы и NBSP."""
+    if s is None:
+        raise InvalidOperation
+    s = s.replace("\xa0", "").replace(" ", "").strip()
+    s = s.replace(",", ".")
+    return Decimal(s)
 
-# ====== парсинг исходного текста из автобая ======
-RE_BUY = re.compile(r"на\s?сумму\s?(\d+[.,]?\d*)\$|куплен[оа]\s?за:\s?(\d+[.,]?\d*)\$", re.I)
+def calc_min_sale(buy_price, target_net=1.0):
+    # sale = (target_net + buy) / (1 - COMMISSION)
+    buy = Decimal(str(buy_price))
+    target = Decimal(str(target_net))
+    denom = Decimal("1") - Decimal(str(COMMISSION))
+    sale = (target + buy) / denom
+    return float(sale.quantize(Decimal("0.01")))
 
-def parse_game_title(text: str) -> str:
-    if not text:
-        return "Неизвестно"
-    m = re.search(r"«([^»]+)»|\"([^\"]+)\"", text)
-    if m:
-        return (m.group(1) or m.group(2)).strip()
-    m = re.search(r"Игра:?\s*([^\n\r]+)", text, re.I)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r"^([^\d\$\n\r]+)", text)
-    if m:
-        return m.group(1).strip()
-    return "Неизвестно"
+def calc_net_from_sale(sale_price, buy_price):
+    sale = Decimal(str(sale_price))
+    buy = Decimal(str(buy_price))
+    received = sale * (Decimal("1") - Decimal(str(COMMISSION)))
+    net = received - buy
+    return float(net.quantize(Decimal("0.01")))
 
-def parse_source(text: str):
-    game = parse_game_title(text)
+# ---- Парсер уведомления ----
+RE_LINK = re.compile(r'По вашей ссылке\s*["“](?P<link>[^"”]+)["”]', re.IGNORECASE)
+RE_BUYPRICE = re.compile(r'за\s*([\d\.,]+)\s*\$')
+RE_KUP = re.compile(r'куплен аккаунт\s*(?P<acc>.*?)\s*(?:В сети:|в сети:|за\s|$)', re.IGNORECASE)
+RE_GAME_QUOTE_FALLBACK = re.compile(r'["“](?P<g>[^"”]+)["”]')
+
+def parse_notification(text: str):
+    text = text.strip()
+    game = None
+    account_desc = ""
     buy_price = None
-    m = RE_BUY.search(text)
+
+    m = RE_LINK.search(text)
     if m:
-        raw = (m.group(1) or m.group(2) or "").replace(",", ".")
+        game = m.group("link").strip()
+
+    m2 = RE_KUP.search(text)
+    if m2:
+        account_desc = m2.group("acc").strip()
+
+    m3 = RE_BUYPRICE.search(text)
+    if m3:
+        price_str = m3.group(1)
         try:
-            buy_price = Decimal(raw)
+            buy_price = float(str(to_decimal(price_str)))
         except Exception:
             buy_price = None
+
+    if not game:
+        m4 = RE_GAME_QUOTE_FALLBACK.search(text)
+        if m4:
+            game = m4.group("g").strip()
+
+    if not game:
+        m5 = re.search(r'(.+?)куплен аккаунт', text, re.IGNORECASE)
+        if m5:
+            game = m5.group(1).strip().split()[-1]
+
     return {
-        "game": game,
-        "account_desc": "",
+        "game": game or "",
+        "account_desc": account_desc or "",
         "buy_price": buy_price,
         "source_text": text
     }
 
-def build_lot_text(lot_id: int, game_title: str,
-                   buy_price: Decimal, min_price_1usd: Decimal) -> str:
-    game_title = " ".join(str(game_title).split())
-    return (
-        f"<b>Лот ID {lot_id}</b>\n"
-        f"Игра: {game_title}\n"
-        f"Куплено за: {buy_price:.2f}$\n"
-        f"Мин. цена для $1: {min_price_1usd:.2f}$\n"
-        f"Описание для лота: {BRAND} | \"{game_title}\" |\n"
-        f"Выбери целевой профит:"
-    )
-
-def make_profit_kb(lot_id: int) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup(row_width=3)
-    kb.row(
-        InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{lot_id}:0.5"),
-        InlineKeyboardButton("Профит $1",   callback_data=f"profit:{lot_id}:1"),
-        InlineKeyboardButton("Профит $2",   callback_data=f"profit:{lot_id}:2"),
-    )
-    return kb
-
-HELP_TEXT = (
-    "Привет! Я бот для подготовки листингов.\n\n"
-    "Просто перешли мне уведомление от автобая — я спаршу цену и покажу мин. цену для заданного профита.\n"
-    "Кнопки под сообщением помогают быстро посчитать цену под $0.5 / $1 / $2 профита."
-)
-
+# ---- Команды/Handlers ----
 @dp.message_handler(commands=["start", "help"])
-async def cmd_start(m: types.Message):
-    await m.answer(HELP_TEXT)
+async def cmd_start(message: types.Message):
+    txt = (
+        "Привет! Я бот для учёта и подготовки листингов.\n\n"
+        "Пересылай уведомления от автобая — я посчитаю мин. цену для профита.\n\n"
+        "Команды:\n"
+        "/add_buy Игра|Цена|Примечание\n"
+        "/list — показать лоты в наличии\n"
+        "/generate_listing <id> <target_net>\n"
+        "/mark_published <id>\n"
+        "/sold <id>|<price>\n"
+        "/stats, /monthly YYYY-MM, /export"
+    )
+    await message.answer(txt)
 
-@dp.message_handler(content_types=["text"])
-async def handle_forwarded(m: types.Message):
-    # игнорируем команды, чтобы не мешать
-    if m.text.startswith("/"):
+@dp.message_handler(commands=["add_buy"])
+async def cmd_add_buy(message: types.Message):
+    args = message.get_args()
+    if not args or "|" not in args:
+        await message.answer("Использование: /add_buy Игра|Цена|Примечание")
         return
-
-    src_text = m.caption or m.text or ""
-    if not src_text.strip():
-        await m.answer("Текст пустой — ничего парсить.")
+    try:
+        game, price, notes = [p.strip() for p in args.split("|", 2)]
+        price_f = float(to_decimal(price))
+    except Exception:
+        await message.answer("Неверный формат цены.")
         return
-
-    data = parse_source(src_text)
-    buy_price = data["buy_price"] or Decimal("0")
-    min_1 = calc_min_sale_for_profit(buy_price, Decimal("1.0"))
 
     rows = read_rows()
-    lot_id = next_id(rows)
-    rows.append({
-        "id": str(lot_id),
-        "source_text": data["source_text"],
-        "game": data["game"],
-        "account_desc": data["account_desc"],
-        "buy_price": str(buy_price),
-        "status": "new",
-        "min_sale_for_1": str(min_1),
+    nid = next_id(rows)
+    min_sale = calc_min_sale(price_f, target_net=1.0)
+    new = {
+        "id": str(nid),
+        "source_text": f"manual:{game}|{price_f}|{notes}",
+        "game": game,
+        "account_desc": "",
+        "buy_price": f"{price_f:.2f}",
+        "buy_date": datetime.utcnow().isoformat(),
+        "status": "in_stock",
+        "min_sale_for_target": f"{min_sale:.2f}",
+        "notes": notes,
+        "sell_price": "",
+        "sell_date": "",
+        "net_profit": ""
+    }
+    rows.append(new)
+    write_rows(rows)
+    await message.answer(f"Добавлен лот ID {nid} — {game} за {price_f}$\nМин. цена для $1: {min_sale}$")
+
+@dp.message_handler(commands=["list"])
+async def cmd_list(message: types.Message):
+    rows = read_rows()
+    in_stock = [r for r in rows if r["status"] in ("in_stock", "listed")]
+    if not in_stock:
+        await message.answer("Нет лотов в наличии.")
+        return
+    text = "Лоты в наличии:\n"
+    for r in in_stock:
+        text += f"ID {r['id']}: {r['game']} — buy {r['buy_price']}$ — status: {r['status']} — notes: {r['notes']}\n"
+    await message.answer(text)
+
+@dp.message_handler(content_types=types.ContentType.TEXT)
+async def handle_text(message: types.Message):
+    text = (message.text or "").strip()
+    parsed = parse_notification(text)
+    if not parsed["buy_price"]:
+        return
+
+    rows = read_rows()
+    nid = next_id(rows)
+    min_sale = calc_min_sale(parsed["buy_price"], target_net=1.0)
+    new = {
+        "id": str(nid),
+        "source_text": parsed["source_text"],
+        "game": parsed["game"],
+        "account_desc": parsed["account_desc"],
+        "buy_price": f"{float(parsed['buy_price']):.2f}",
+        "buy_date": datetime.utcnow().isoformat(),
+        "status": "in_stock",
+        "min_sale_for_target": f"{min_sale:.2f}",
         "notes": "",
         "sell_price": "",
         "sell_date": "",
         "net_profit": ""
-    })
+    }
+    rows.append(new)
     write_rows(rows)
 
-    reply = build_lot_text(lot_id, data["game"], buy_price, min_1)
-    await m.answer(reply, reply_markup=make_profit_kb(lot_id))
-
-@dp.callback_query_handler(lambda c: c.data.startswith("profit:"))
-async def on_profit_click(c: types.CallbackQuery):
-    # формат: profit:<lot_id>:<target_profit>
-    try:
-        _, lot_id_s, target_s = c.data.split(":")
-        lot_id = int(lot_id_s)
-        target = Decimal(target_s)
-    except Exception:
-        await c.answer("Ошибка данных", show_alert=True)
-        return
-
-    rows = read_rows()
-    row = next((r for r in rows if int(r["id"]) == lot_id), None)
-    if not row:
-        await c.answer("Лот не найден", show_alert=True)
-        return
-
-    buy_price = Decimal(row.get("buy_price") or "0")
-    sale_price = calc_min_sale_for_profit(buy_price, target)
-
-    txt = (
-        f"Лот ID {lot_id}\n"
-        f"Куплено за: {buy_price:.2f}$\n"
-        f"Целевой профит: {target:.2f}$\n"
-        f"<b>Выставляй по: {sale_price:.2f}$</b>"
+    kb = InlineKeyboardMarkup(row_width=4)
+    kb.add(
+        InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
+        InlineKeyboardButton("Профит $1", callback_data=f"profit:{nid}:1"),
+        InlineKeyboardButton("Профит $2", callback_data=f"profit:{nid}:2"),
     )
-    await c.message.answer(txt)
-    await c.answer()
+    kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
+    kb.add(InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+           InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}"))
+
+    draft_text = (
+        f"🆕 Новый лот (ID {nid})\n"
+        f"Игра: {parsed['game']}\n"
+        f"Описание: {parsed['account_desc']}\n"
+        f"Куплено за: {float(parsed['buy_price']):.2f}$\n"
+        f"Мин. цена для $1: {min_sale}$\n\n"
+        "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
+    )
+    await message.answer(draft_text, reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("profit:"))
+async def cb_profit(call: types.CallbackQuery):
+    _, nid, profit = call.data.split(":", 2)
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == nid), None)
+    if not row:
+        await call.answer("Лот не найден.", show_alert=True)
+        return
+
+    if profit == "custom":
+        await call.message.answer(f"Введите /generate_listing {nid} <целевой_профит>\nПример: /generate_listing {nid} 1.5")
+        await call.answer()
+        return
+
+    try:
+        target = float(profit)
+    except:
+        target = 1.0
+
+    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
+    listing_text = (
+        f"ID {nid} — {row['game']}\n"
+        f"Куплено: {row['buy_price']}$\n"
+        f"Целевой чистый профит: {target}$\n"
+        f"Мин. цена продажи: {min_sale}$\n\n"
+        "Шаблон объявления:\n"
+        f"Заголовок: Аккаунт {row['game']} | Цена {min_sale}$\n"
+        f"Описание:\n- Куплен за: {row['buy_price']}$\n- Особенности: {row['account_desc'] or row['notes']}\n"
+    )
+    await call.message.answer(listing_text)
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("posted:"))
+async def cb_posted(call: types.CallbackQuery):
+    _, nid = call.data.split(":", 1)
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == nid), None)
+    if not row:
+        await call.answer("Лот не найден.", show_alert=True)
+        return
+    row["status"] = "listed"
+    write_rows(rows)
+    await call.message.answer(f"Лот {nid} помечен как опубликованный.")
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("sold_direct:"))
+async def cb_sold_direct(call: types.CallbackQuery):
+    _, nid = call.data.split(":", 1)
+    await call.message.answer(f"Чтобы отметить лот {nid} как проданный, отправь: /sold {nid}|<цена_продажи>\nПример: /sold {nid}|10")
+    await call.answer()
+
+@dp.message_handler(commands=["generate_listing"])
+async def cmd_generate_listing(message: types.Message):
+    args = message.get_args().split()
+    if len(args) < 2:
+        await message.answer("Использование: /generate_listing <id> <target_net>")
+        return
+    nid, target = args[0], args[1]
+    try:
+        target_f = float(target)
+    except:
+        await message.answer("Неверный целевой профит.")
+        return
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == nid), None)
+    if not row:
+        await message.answer("ID не найден.")
+        return
+    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target_f)
+    txt = (
+        f"ID {nid} — {row['game']}\n"
+        f"Куплено за: {row['buy_price']}$\n"
+        f"Целевой чистый профит: {target_f}$\n"
+        f"Мин. цена продажи: {min_sale}$\n\n"
+        f"Шаблон объявления:\nЗаголовок: Аккаунт {row['game']} | Цена {min_sale}$\n"
+        f"Описание: - Куплен за {row['buy_price']}$; {row['account_desc'] or row['notes']}\n"
+    )
+    await message.answer(txt)
+
+@dp.message_handler(commands=["mark_published"])
+async def cmd_mark_published(message: types.Message):
+    nid = message.get_args().strip()
+    if not nid:
+        await message.answer("Использование: /mark_published <id>")
+        return
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == nid), None)
+    if not row:
+        await message.answer("ID не найден.")
+        return
+    row["status"] = "listed"
+    write_rows(rows)
+    await message.answer(f"ID {nid} помечен как опубликованный.")
+
+@dp.message_handler(commands=["sold"])
+async def cmd_sold(message: types.Message):
+    args = message.get_args()
+    if not args or "|" not in args:
+        await message.answer("Использование: /sold <id>|<price>\nПример: /sold 3|10")
+        return
+    nid, price = [p.strip() for p in args.split("|", 1)]
+    try:
+        price_f = float(to_decimal(price))
+    except:
+        await message.answer("Неверная цена.")
+        return
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == nid), None)
+    if not row:
+        await message.answer("ID не найден.")
+        return
+    net = calc_net_from_sale(price_f, float(row["buy_price"]))
+    row["status"] = "sold"
+    row["sell_price"] = f"{price_f:.2f}"
+    row["sell_date"] = datetime.utcnow().isoformat()
+    row["net_profit"] = f"{net:.2f}"
+    write_rows(rows)
+    await message.answer(f"ID {nid} отмечен как проданный. Чистая прибыль: {net:.2f}$")
+
+@dp.message_handler(commands=["stats"])
+async def cmd_stats(message: types.Message):
+    rows = read_rows()
+    bought_count = len(rows)
+    sold = [r for r in rows if r["status"] == "sold" and r["net_profit"]]
+    total_net = sum(float(r["net_profit"]) for r in sold) if sold else 0.0
+    total_spent = sum(float(r["buy_price"]) for r in rows)
+    sold_count = len(sold)
+    text = (
+        f"Статистика:\n"
+        f"Всего позиций: {bought_count}\n"
+        f"Продано: {sold_count}\n"
+        f"Потрачено всего: {total_spent:.2f}$\n"
+        f"Суммарная чистая прибыль: {total_net:.2f}$\n"
+    )
+    await message.answer(text)
+
+@dp.message_handler(commands=["monthly"])
+async def cmd_monthly(message: types.Message):
+    arg = message.get_args().strip()
+    if not arg:
+        await message.answer("Использование: /monthly YYYY-MM")
+        return
+    try:
+        year, month = arg.split("-", 1)
+        year = int(year); month = int(month)
+    except:
+        await message.answer("Неверный формат. Пример: /monthly 2025-10")
+        return
+    rows = read_rows()
+    bought = [r for r in rows if r["buy_date"] and r["buy_date"].startswith(f"{year:04d}-{month:02d}")]
+    sold = [r for r in rows if r["sell_date"] and r["sell_date"].startswith(f"{year:04d}-{month:02d}")]
+    total_spent = sum(float(r["buy_price"]) for r in bought)
+    total_net = sum(float(r["net_profit"]) for r in sold if r["net_profit"])
+    res = (
+        f"Месяц {year}-{month:02d}:\n"
+        f"Куплено: {len(bought)} шт., потрачено: {total_spent:.2f}$\n"
+        f"Продано: {len(sold)} шт., чистая прибыль: {total_net:.2f}$\n"
+    )
+    await message.answer(res)
+
+@dp.message_handler(commands=["export"])
+async def cmd_export(message: types.Message):
+    if not os.path.exists(DATA_CSV):
+        await message.answer("Файл не найден.")
+        return
+    await message.answer_document(open(DATA_CSV, "rb"))
+
+# ВАЖНО: никаких executor.start_polling здесь нет!
+# dp и bot импортирует app.py (Flask) и гоняет webhook.
