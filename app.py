@@ -1,12 +1,10 @@
 # app.py
 import os
-import asyncio
-# app.py — фрагмент
-
 from flask import Flask, request
 import asyncio
 from aiogram.types import Update
-from bot_logic import dp   # как у тебя уже подключено
+from bot_logic import dp
+
 
 app = Flask(__name__)
 
