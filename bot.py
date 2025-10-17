@@ -57,7 +57,7 @@ COMMISSION = 0.06  # 6% (3% продажа + 3% вывод)
 if not API_TOKEN:
     raise RuntimeError("Environment variable BOT_TOKEN is not set")
 
-bot = Bot(token=API_TOKEN, parse_mode="HTML")
+bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
 # Создаём CSV если его нет
@@ -424,6 +424,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
