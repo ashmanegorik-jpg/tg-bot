@@ -30,7 +30,7 @@ def telegram_webhook():
 
         update = Update(**data)
         # запускаем обработку строго для одного апдейта
-        asyncio.run(dp.process_updates([update]))
+        asyncio.run(dp.process_update(update))
 
         return "OK", 200
     except Exception as e:
