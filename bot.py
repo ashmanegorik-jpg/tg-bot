@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# reseller_bot_csv.py  — версия для WEBHOOK (Render)
-
 import os
 import csv
 import re
@@ -8,10 +5,16 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# ==== ТОКЕН ТОЛЬКО ЗДЕСЬ: API_TOKEN ====
+API_TOKEN = os.getenv("BOT_TOKEN")
+if not API_TOKEN:
+    raise RuntimeError("Environment variable BOT_TOKEN is not set")
 
 bot = Bot(token=API_TOKEN, parse_mode="HTML")
 dp = Dispatcher(bot)
+
 
 # ====== HELP-текст и меню команд ======
 HELP_TEXT = (
@@ -421,4 +424,5 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
