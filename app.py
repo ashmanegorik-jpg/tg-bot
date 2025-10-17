@@ -3,7 +3,7 @@ import os
 from flask import Flask, request
 import asyncio
 from aiogram.types import Update
-from bot_logic import dp
+from bot import dp, bot
 
 
 app = Flask(__name__)
