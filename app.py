@@ -1,39 +1,48 @@
 # app.py
 import os
 import asyncio
-from flask import Flask, request
-from aiogram import types, Bot, Dispatcher
+# app.py — фрагмент
 
-# Импортируем из твоего bot.py
-from bot import bot, dp
+from flask import Flask, request
+import asyncio
+from aiogram.types import Update
+from bot_logic import dp   # как у тебя уже подключено
 
 app = Flask(__name__)
 
-# Один event loop на всё приложение
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
 @app.route("/", methods=["GET"])
-def health():
+def root():
     return "OK", 200
 
-# Вебхук на /<TOKEN>
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")  # как у тебя уже есть
+
 @app.route(f"/{TOKEN}", methods=["GET", "POST"])
 def telegram_webhook():
     if request.method == "GET":
-        return "Webhook OK", 200
+        return "Webhook is working", 200
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        # логируем входящее сырьё — очень полезно
+        print(">>> incoming update:", data)
 
-    data = request.get_json(force=True, silent=False)
-    update = types.Update(**data)
+        # ВАЖНО: пропускаем всё, что не message/callback_query,
+        # чтобы не падать внутри aiogram на NoneType
+        if "message" not in data and "callback_query" not in data:
+            return "IGNORED", 200
 
-    # Привязываем текущие объекты к контексту aiogram
-    Bot.set_current(bot)
-    Dispatcher.set_current(dp)
+        update = Update(**data)
+        # запускаем обработку строго для одного апдейта
+        asyncio.run(dp.process_updates([update]))
 
-    # Обрабатываем апдейт
-    loop.run_until_complete(dp.process_updates([update]))
-    return "OK", 200
+        return "OK", 200
+    except Exception as e:
+        import traceback
+        print(">>> ERROR in webhook:", e)
+        traceback.print_exc()
+        # ВАЖНО: возвращаем 200, чтобы Telegram НЕ ретраил один и тот же апдейт
+        # (иначе будешь получать 500 снова и снова)
+        return "OK", 200
+
 
 if __name__ == "__main__":
     # Локальный запуск (Render всё равно стартует через gunicorn)
