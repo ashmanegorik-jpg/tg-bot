@@ -6,24 +6,14 @@ from flask import Flask, request
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update, BotCommand
 
-from bot import dp, bot, set_bot_commands  # + set_bot_commands
-  # твой dp и bot из bot.py
+from bot import dp, bot  # импортируем готовые dp и bot из bot.py
 
 app = Flask(__name__)
 
-try:
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        loop.create_task(set_bot_commands())
-    else:
-        loop.run_until_complete(set_bot_commands())
-    print(">>> Bot commands set")
-except Exception as e:
-    print(">>> Failed to set bot commands:", e)
-    
-TOKEN = os.getenv("BOT_TOKEN")  # как и раньше
+# Токен читаем из переменных окружения Render
+TOKEN = os.getenv("BOT_TOKEN")
 
-# --- ставим команды один раз при первом апдейте ---
+# --- Ставит меню команд один раз при первом апдейте ---
 STARTUP_DONE = False
 
 async def ensure_startup():
@@ -33,7 +23,8 @@ async def ensure_startup():
     global STARTUP_DONE
     if STARTUP_DONE:
         return
-    # на всякий случай кладём bot/dp в текущий контекст aiogram
+
+    # Кладём bot/dp в текущий контекст aiogram
     Bot.set_current(bot)
     Dispatcher.set_current(dp)
 
@@ -55,6 +46,7 @@ async def ensure_startup():
 def root():
     return "OK", 200
 
+
 @app.route(f"/{TOKEN}", methods=["GET", "POST"])
 def telegram_webhook():
     if request.method == "GET":
@@ -64,23 +56,21 @@ def telegram_webhook():
         data = request.get_json(force=True, silent=True) or {}
         print(">>> incoming update:", data)
 
-        # пропускаем апдейты без message/callback_query, чтобы не ловить None
+        # Пропускаем апдейты без message/callback_query
         if "message" not in data and "callback_query" not in data:
             return "IGNORED", 200
 
-        # превращаем словарь в объект апдейта
+        # Словарь -> объект Update
         update = Update.to_object(data)
 
-        # ВАЖНО: кладём bot и dp в текущий контекст aiogram
+        # Важно: положить bot/dp в текущий контекст aiogram
         Bot.set_current(bot)
         Dispatcher.set_current(dp)
 
-async def _handle():
-    await ensure_startup()           # <<< ВАЖНО: команды установятся один раз
-    await dp.process_update(update)
-
-        
-      async def _handle():
+        async def _handle():
+            # Меню команд ставим один раз
+            await ensure_startup()
+            # Обрабатываем апдейт
             await dp.process_update(update)
 
         asyncio.run(_handle())
@@ -95,5 +85,5 @@ async def _handle():
 
 
 if __name__ == "__main__":
-    # локальный запуск (на Render всё равно стартует через gunicorn)
+    # Локальный запуск (на Render всё равно стартует через gunicorn)
     app.run(host="0.0.0.0", port=10000)
