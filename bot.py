@@ -8,7 +8,42 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
+
+bot = Bot(token=API_TOKEN, parse_mode="HTML")
+dp = Dispatcher(bot)
+
+# ====== HELP-текст и меню команд ======
+HELP_TEXT = (
+    "Привет! Я бот для учёта и подготовки листингов.\n\n"
+    "Работаю с CSV-хранилищем.\n\n"
+    "Присылай пересланные уведомления от автобая (или используй /add_buy).\n\n"
+    "Команды:\n"
+    "/add_buy Игра|Цена|Примечание — добавить вручную\n"
+    "/list — показать текущие не проданные лоты\n"
+    "/generate_listing <id> <target_net> — получить мин. цену и шаблон\n"
+    "/mark_published <id> — пометить как опубликованный\n"
+    "/sold <id>|<price> — отметить как проданный (пример: /sold 3|10)\n"
+    "/stats — общая статистика\n"
+    "/monthly YYYY-MM — статистика за месяц\n"
+    "/export — экспорт CSV\n"
+)
+
+async def set_bot_commands():
+    commands = [
+        BotCommand("start", "помощь и список команд"),
+        BotCommand("add_buy", "Игра|Цена|Примечание"),
+        BotCommand("list", "лоты в наличии"),
+        BotCommand("generate_listing", "<id> <target_net>"),
+        BotCommand("mark_published", "<id>"),
+        BotCommand("sold", "<id>|<price>"),
+        BotCommand("stats", "общая статистика"),
+        BotCommand("monthly", "YYYY-MM"),
+        BotCommand("export", "выгрузка CSV"),
+    ]
+    await bot.set_my_commands(commands)
+# ======================================
+
 
 # ========== НАСТРОЙКИ ==========
 API_TOKEN = os.getenv("BOT_TOKEN")  # ВАЖНО: читаем BOT_TOKEN (как в Render)
@@ -121,18 +156,8 @@ def parse_notification(text: str):
 # ---- Команды/Handlers ----
 @dp.message_handler(commands=["start", "help"])
 async def cmd_start(message: types.Message):
-    txt = (
-        "Привет! Я бот для учёта и подготовки листингов.\n\n"
-        "Пересылай уведомления от автобая — я посчитаю мин. цену для профита.\n\n"
-        "Команды:\n"
-        "/add_buy Игра|Цена|Примечание\n"
-        "/list — показать лоты в наличии\n"
-        "/generate_listing <id> <target_net>\n"
-        "/mark_published <id>\n"
-        "/sold <id>|<price>\n"
-        "/stats, /monthly YYYY-MM, /export"
-    )
-    await message.answer(txt)
+    await message.answer(HELP_TEXT)
+
 
 @dp.message_handler(commands=["add_buy"])
 async def cmd_add_buy(message: types.Message):
@@ -396,3 +421,4 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
