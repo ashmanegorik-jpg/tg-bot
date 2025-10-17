@@ -6,10 +6,21 @@ from flask import Flask, request
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
 
-from bot import dp, bot  # твой dp и bot из bot.py
+from bot import dp, bot, set_bot_commands  # + set_bot_commands
+  # твой dp и bot из bot.py
 
 app = Flask(__name__)
 
+try:
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        loop.create_task(set_bot_commands())
+    else:
+        loop.run_until_complete(set_bot_commands())
+    print(">>> Bot commands set")
+except Exception as e:
+    print(">>> Failed to set bot commands:", e)
+    
 TOKEN = os.getenv("BOT_TOKEN")  # как и раньше
 
 @app.route("/", methods=["GET"])
