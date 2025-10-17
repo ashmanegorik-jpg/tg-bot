@@ -23,11 +23,6 @@ def telegram_webhook():
         # логируем входящее сырьё — очень полезно
         print(">>> incoming update:", data)
 
-        # ВАЖНО: пропускаем всё, что не message/callback_query,
-        # чтобы не падать внутри aiogram на NoneType
-        if "message" not in data and "callback_query" not in data:
-            return "IGNORED", 200
-
         update = Update(**data)
         # запускаем обработку строго для одного апдейта
         asyncio.run(dp.process_update(update))
