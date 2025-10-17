@@ -20,14 +20,21 @@ def telegram_webhook():
         return "Webhook is working", 200
     try:
         data = request.get_json(force=True, silent=True) or {}
-        # логируем входящее сырьё — очень полезно
-        print(">>> incoming update:", data)
+print(">>> incoming update:", data)
 
-        update = Update(**data)
-        # запускаем обработку строго для одного апдейта
-        asyncio.run(dp.process_update(update))
+update = Update.to_object(data)
 
-        return "OK", 200
+# <<< ДОБАВЬ ЭТИ 2 СТРОКИ
+from aiogram import Bot, Dispatcher
+Bot.set_current(bot)
+Dispatcher.set_current(dp)
+# >>>
+
+async def _handle():
+    await dp.process_update(update)
+
+asyncio.run(_handle())
+return "OK", 200
     except Exception as e:
         import traceback
         print(">>> ERROR in webhook:", e)
