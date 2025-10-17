@@ -4,7 +4,7 @@ import asyncio
 from flask import Flask, request
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import Update
+from aiogram.types import Update, BotCommand
 
 from bot import dp, bot, set_bot_commands  # + set_bot_commands
   # твой dp и bot из bot.py
@@ -22,6 +22,34 @@ except Exception as e:
     print(">>> Failed to set bot commands:", e)
     
 TOKEN = os.getenv("BOT_TOKEN")  # как и раньше
+
+# --- ставим команды один раз при первом апдейте ---
+STARTUP_DONE = False
+
+async def ensure_startup():
+    """
+    Выполняется один раз: регистрируем меню команд в Telegram.
+    """
+    global STARTUP_DONE
+    if STARTUP_DONE:
+        return
+    # на всякий случай кладём bot/dp в текущий контекст aiogram
+    Bot.set_current(bot)
+    Dispatcher.set_current(dp)
+
+    await bot.set_my_commands([
+        BotCommand("start", "Показать список команд"),
+        BotCommand("add_buy", "Игра|Цена|Примечание — добавить вручную"),
+        BotCommand("list", "Показать лоты в наличии"),
+        BotCommand("generate_listing", "<id> <target_net> — расчёт цены"),
+        BotCommand("mark_published", "<id> — отметить опубликованным"),
+        BotCommand("sold", "<id>|<price> — отметить продажу"),
+        BotCommand("stats", "Общая статистика"),
+        BotCommand("monthly", "YYYY-MM — статистика за месяц"),
+        BotCommand("export", "Экспорт CSV"),
+    ])
+    STARTUP_DONE = True
+
 
 @app.route("/", methods=["GET"])
 def root():
@@ -47,7 +75,12 @@ def telegram_webhook():
         Bot.set_current(bot)
         Dispatcher.set_current(dp)
 
-        async def _handle():
+async def _handle():
+    await ensure_startup()           # <<< ВАЖНО: команды установятся один раз
+    await dp.process_update(update)
+
+        
+      async def _handle():
             await dp.process_update(update)
 
         asyncio.run(_handle())
