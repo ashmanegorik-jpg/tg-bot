@@ -518,14 +518,16 @@ async def cb_profit(call: types.CallbackQuery):
         return
 
     if profit == "custom":
-    # сначала попросим описание, потом спросим кастомный профит
-    # попробуем подсказать сохранённый шаблон, если он уже есть
-    saved = GAME_DEFAULT_DESC.get(row["game"])
-    hint = f'\n(для "{row["game"]}" у меня уже есть шаблон: {saved})' if saved else ""
-    USER_STATE[call.from_user.id] = {"mode": "custom_desc", "nid": nid}
-    await call.message.answer("Введите желаемый текст для описания лота." + hint + "\n(после этого я спрошу размер профита)")
-    await call.answer()
-    return
+        # сначала попросим описание, потом спросим кастомный профит
+        # попробуем подсказать сохранённый шаблон, если он уже есть
+        saved = GAME_DEFAULT_DESC.get(row["game"])
+        hint = f'\n(для "{row["game"]}" у меня уже есть шаблон: {saved})' if saved else ""
+        USER_STATE[call.from_user.id] = {"mode": "custom_desc", "nid": nid}
+        await call.message.answer(
+            "Введите желаемый текст для описания лота." + hint + "\n(после этого я спрошу размер профита)"
+        )
+        await call.answer()
+        return
 
     try:
         target = float(profit)
@@ -535,11 +537,18 @@ async def cb_profit(call: types.CallbackQuery):
     min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
 
     # Пробуем найти сохранённое описание для этой игры
-    saved_desc = get_description_for_game(row["game"])
+    saved_desc = GAME_DEFAULT_DESC.get(row["game"])
     if saved_desc:
-        listing_text = compose_listing(row, nid, target, min_sale, saved_desc)
+        listing_text = (
+            f"ID {nid} — {row['game']}\n"
+            f"Куплено: {row['buy_price']}$\n"
+            f"Целевой чистый профит: {target}$\n"
+            f"Мин. цена продажи: {min_sale}$\n\n"
+            "Описание для лота:\n"
+            f"{saved_desc}"
+        )
         kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"editdesc:{nid}"))
+        kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
         kb.add(
             InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
             InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
@@ -548,15 +557,10 @@ async def cb_profit(call: types.CallbackQuery):
         await call.answer()
         return
 
-    # Иначе — просим ввести описание
-    WAITING_DESC[call.message.chat.id] = {
-        "nid": str(nid),
-        "target": target,
-        "min_sale": min_sale,
-        "game": row["game"],
-    }
+    # Если сохранённого описания нет — просим ввести
+    USER_STATE[call.from_user.id] = {"mode": "fixed_desc", "nid": nid, "target": target}
     await call.message.answer(
-        f"Введите желаемый текст для описания лота для игры «{row['game']}».\n"
+        f"Введите желаемый текст для описания лота для игры «{row['game']}». "
         f"После отправки я подставлю его в шаблон и запомню для этой игры."
     )
     await call.answer()
