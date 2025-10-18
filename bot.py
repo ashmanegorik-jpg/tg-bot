@@ -9,6 +9,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 import asyncio
 
 FILE_LOCK = asyncio.Lock()
+# Память простых состояний диалога и последних описаний по игре
+USER_STATE = {}          # user_id -> {...}
+GAME_DEFAULT_DESC = {}   # game_title -> last_description
 
 # ==== ТОКЕН ТОЛЬКО ЗДЕСЬ: API_TOKEN ====
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -315,7 +318,71 @@ async def receive_description(message: types.Message):
         InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
     )
     await message.answer(listing_text, reply_markup=kb)
+# 3.1. Пользователь вводит описание для кастомного профита
+@dp.message_handler(lambda m: USER_STATE.get(m.from_user.id, {}).get("mode") == "custom_desc")
+async def wait_custom_description(message: types.Message):
+    st = USER_STATE.get(message.from_user.id)
+    if not st:
+        return
+    desc = (message.text or "").strip()
+    if not desc:
+        await message.answer("Опишите лот текстом, пожалуйста.")
+        return
 
+    # сохраним описание временно и попросим ввести профит
+    USER_STATE[message.from_user.id] = {"mode": "custom_profit", "nid": st["nid"], "desc": desc}
+    await message.answer("Ок! Теперь введите желаемый профит числом (например: 1.2).")
+
+
+# 3.2. Пользователь вводит сам профит (число)
+@dp.message_handler(lambda m: USER_STATE.get(m.from_user.id, {}).get("mode") == "custom_profit")
+async def wait_custom_profit(message: types.Message):
+    st = USER_STATE.get(message.from_user.id)
+    if not st:
+        return
+
+    text = (message.text or "").strip()
+    try:
+        target = float(to_decimal(text))
+    except Exception:
+        await message.answer("Не понял. Введите профит числом, например 1.5")
+        return
+
+    nid = st["nid"]
+    desc = st["desc"]
+
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == str(nid)), None)
+    if not row:
+        USER_STATE.pop(message.from_user.id, None)
+        await message.answer("Лот не найден.")
+        return
+
+    # посчитаем минимальную цену
+    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
+
+    # запомним описание для этой игры на будущее
+    GAME_DEFAULT_DESC[row["game"]] = desc
+
+    # соберём ответ и кнопки
+    listing_text = (
+        f"ID {nid} — {row['game']}\n"
+        f"Куплено: {row['buy_price']}$\n"
+        f"Целевой чистый профит: {target}$\n"
+        f"Мин. цена продажи: {min_sale}$\n\n"
+        "Описание для лота:\n"
+        f"{desc}"
+    )
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+
+    await message.answer(listing_text, reply_markup=kb)
+    USER_STATE.pop(message.from_user.id, None)
 @dp.message_handler(
     lambda m: (m.text is not None) and not m.text.startswith('/') and m.chat.id not in WAITING_DESC,
     content_types=types.ContentType.TEXT,
@@ -451,12 +518,14 @@ async def cb_profit(call: types.CallbackQuery):
         return
 
     if profit == "custom":
-        await call.message.answer(
-            f"Введите /generate_listing {nid} <целевой_профит>\n"
-            f"Пример: /generate_listing {nid} 1.5"
-        )
-        await call.answer()
-        return
+    # сначала попросим описание, потом спросим кастомный профит
+    # попробуем подсказать сохранённый шаблон, если он уже есть
+    saved = GAME_DEFAULT_DESC.get(row["game"])
+    hint = f'\n(для "{row["game"]}" у меня уже есть шаблон: {saved})' if saved else ""
+    USER_STATE[call.from_user.id] = {"mode": "custom_desc", "nid": nid}
+    await call.message.answer("Введите желаемый текст для описания лота." + hint + "\n(после этого я спрошу размер профита)")
+    await call.answer()
+    return
 
     try:
         target = float(profit)
@@ -491,6 +560,56 @@ async def cb_profit(call: types.CallbackQuery):
         f"После отправки я подставлю его в шаблон и запомню для этой игры."
     )
     await call.answer()
+# Нажали "Изменить текст" — просим новый текст и помним выбранный профит
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("edit_desc:"))
+async def cb_edit_desc(call: types.CallbackQuery):
+    _, nid, target = call.data.split(":", 2)
+    USER_STATE[call.from_user.id] = {"mode": "edit_desc", "nid": nid, "target": float(target)}
+    await call.message.answer("Введите новый текст описания лота.")
+    await call.answer()
+
+
+# Пришёл новый текст — пересобираем листинг с тем же профитом
+@dp.message_handler(lambda m: USER_STATE.get(m.from_user.id, {}).get("mode") == "edit_desc")
+async def handle_edit_desc(message: types.Message):
+    st = USER_STATE.get(message.from_user.id)
+    if not st:
+        return
+    nid = st["nid"]
+    target = st["target"]
+    desc = (message.text or "").strip()
+    if not desc:
+        await message.answer("Опишите лот текстом, пожалуйста.")
+        return
+
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == str(nid)), None)
+    if not row:
+        USER_STATE.pop(message.from_user.id, None)
+        await message.answer("Лот не найден.")
+        return
+
+    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
+    GAME_DEFAULT_DESC[row["game"]] = desc
+
+    listing_text = (
+        f"ID {nid} — {row['game']}\n"
+        f"Куплено: {row['buy_price']}$\n"
+        f"Целевой чистый профит: {target}$\n"
+        f"Мин. цена продажи: {min_sale}$\n\n"
+        "Описание для лота:\n"
+        f"{desc}"
+    )
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+
+    await message.answer(listing_text, reply_markup=kb)
+    USER_STATE.pop(message.from_user.id, None)
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("editdesc:"))
 async def cb_editdesc(call: types.CallbackQuery):
     _, nid = call.data.split(":", 1)
