@@ -84,11 +84,13 @@ def write_rows(rows):
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
-        def reset_csv():
+
+def reset_csv():
     """Перезаписывает inventory.csv, оставляя только заголовок."""
     with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
+
 
 def next_id(rows):
     if not rows:
@@ -317,6 +319,7 @@ async def cb_posted(call: types.CallbackQuery):
     write_rows(rows)
     await call.message.answer(f"Лот {nid} помечен как опубликованный.")
     await call.answer()
+
     
     @dp.callback_query_handler(lambda c: c.data and c.data.startswith("wipe:"))
 async def cb_wipe(call: types.CallbackQuery):
@@ -334,14 +337,6 @@ async def cb_sold_direct(call: types.CallbackQuery):
     await call.message.answer(f"Чтобы отметить лот {nid} как проданный, отправь: /sold {nid}|<цена_продажи>\nПример: /sold {nid}|10")
     await call.answer()
     
-    @dp.callback_query_handler(lambda c: c.data and c.data.startswith("wipe:"))
-async def cb_wipe(call: types.CallbackQuery):
-    if call.data == "wipe:yes":
-        reset_csv()
-        await call.message.answer("✅ Готово. База очищена (inventory.csv перезаписан заголовком).")
-    else:
-        await call.message.answer("Отменено.")
-    await call.answer()
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("profit:"))
 async def cb_profit(call: types.CallbackQuery):
@@ -481,6 +476,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
