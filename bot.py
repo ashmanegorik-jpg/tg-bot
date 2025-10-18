@@ -71,7 +71,67 @@ FIELDNAMES = [
     "buy_date", "status", "min_sale_for_target", "notes",
     "sell_price", "sell_date", "net_profit"
 ]
+# ====== Память описаний по игре (descriptions.csv) ======
+DESC_CSV = os.path.join(os.path.dirname(__file__), "descriptions.csv")
+DESC_FIELDS = ["game_key", "description", "updated_at"]
 
+if not os.path.exists(DESC_CSV):
+    with open(DESC_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=DESC_FIELDS)
+        writer.writeheader()
+
+# Кто сейчас «вводит описание»: key = chat_id -> контекст ввода
+WAITING_DESC = {}  # { chat_id: {"nid": str, "target": float, "min_sale": float, "game": str} }
+
+def _game_key(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "").strip().lower())
+
+def get_description_for_game(game: str):
+    key = _game_key(game)
+    try:
+        with open(DESC_CSV, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row["game_key"] == key:
+                    return row["description"]
+    except FileNotFoundError:
+        pass
+    return None
+
+def save_description_for_game(game: str, description: str):
+    key = _game_key(game)
+    rows = []
+    if os.path.exists(DESC_CSV):
+        with open(DESC_CSV, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+
+    updated = False
+    for r in rows:
+        if r["game_key"] == key:
+            r["description"] = description
+            r["updated_at"] = datetime.utcnow().isoformat()
+            updated = True
+            break
+    if not updated:
+        rows.append({
+            "game_key": key,
+            "description": description,
+            "updated_at": datetime.utcnow().isoformat()
+        })
+
+    with open(DESC_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=DESC_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+def compose_listing(row, nid, target, min_sale, description: str) -> str:
+    return (
+        f"ID {nid} — {row['game']}\n"
+        f"Куплено: {row['buy_price']}$\n"
+        f"Целевой чистый профит: {target}$\n"
+        f"Мин. цена продажи: {min_sale}$\n\n"
+        "Описание для лота:\n"
+        f"{description.strip()}"
+    )
 if not os.path.exists(DATA_CSV):
     with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
@@ -223,9 +283,41 @@ async def cmd_list(message: types.Message):
     for r in in_stock:
         text += f"ID {r['id']}: {r['game']} — buy {r['buy_price']}$ — status: {r['status']} — notes: {r['notes']}\n"
     await message.answer(text)
+@dp.message_handler(lambda m: (m.text is not None) and m.chat.id in WAITING_DESC, content_types=types.ContentType.TEXT)
+async def receive_description(message: types.Message):
+    ctx = WAITING_DESC.pop(message.chat.id, None)
+    if not ctx:
+        return
+
+    desc = message.text.strip()
+    nid = ctx["nid"]
+    target = ctx["target"]
+    min_sale = ctx["min_sale"]
+    game = ctx["game"]
+
+    # Сохраняем «память» описания для этой игры
+    async with FILE_LOCK:
+        save_description_for_game(game, desc)
+
+    # Достаём ряд для сборки ответа
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == str(nid)), None)
+    if not row:
+        await message.answer("Лот не найден, попробуйте ещё раз.")
+        return
+
+    listing_text = compose_listing(row, nid, target, min_sale, desc)
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"editdesc:{nid}"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
+    )
+    await message.answer(listing_text, reply_markup=kb)
 
 @dp.message_handler(
-    lambda m: (m.text is not None) and not m.text.startswith('/'),
+    lambda m: (m.text is not None) and not m.text.startswith('/') and m.chat.id not in WAITING_DESC,
     content_types=types.ContentType.TEXT,
 )
 async def handle_text(message: types.Message):
@@ -353,7 +445,7 @@ async def cb_profit(call: types.CallbackQuery):
     _, nid, profit = call.data.split(":", 2)
 
     rows = read_rows()
-    row = next((r for r in rows if r["id"] == nid), None)
+    row = next((r for r in rows if r["id"] == str(nid)), None)
     if not row:
         await call.answer("Лот не найден.", show_alert=True)
         return
@@ -371,18 +463,53 @@ async def cb_profit(call: types.CallbackQuery):
     except Exception:
         target = 1.0
 
-    # минимальная цена под выбранный профит
     min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
 
-    listing_text = (
-        f"ID {nid} — {row['game']}\n"
-        f"Куплено: {row['buy_price']}$\n"
-        f"Целевой чистый профит: {target}$\n"
-        f"Мин. цена продажи: {min_sale}$\n\n"
-        "Описание для лота:\n"
-        f'Stirka | "{row["game"]}"'
+    # Пробуем найти сохранённое описание для этой игры
+    saved_desc = get_description_for_game(row["game"])
+    if saved_desc:
+        listing_text = compose_listing(row, nid, target, min_sale, saved_desc)
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"editdesc:{nid}"))
+        kb.add(
+            InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+            InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+        )
+        await call.message.answer(listing_text, reply_markup=kb)
+        await call.answer()
+        return
+
+    # Иначе — просим ввести описание
+    WAITING_DESC[call.message.chat.id] = {
+        "nid": str(nid),
+        "target": target,
+        "min_sale": min_sale,
+        "game": row["game"],
+    }
+    await call.message.answer(
+        f"Введите желаемый текст для описания лота для игры «{row['game']}».\n"
+        f"После отправки я подставлю его в шаблон и запомню для этой игры."
     )
-    await call.message.answer(listing_text)
+    await call.answer()
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("editdesc:"))
+async def cb_editdesc(call: types.CallbackQuery):
+    _, nid = call.data.split(":", 1)
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == str(nid)), None)
+    if not row:
+        await call.answer("Лот не найден.", show_alert=True)
+        return
+
+    WAITING_DESC[call.message.chat.id] = {
+        "nid": str(nid),
+        "target": 0.0,
+        "min_sale": 0.0,
+        "game": row["game"],
+    }
+    await call.message.answer(
+        f"Отправьте новый текст описания для игры «{row['game']}».\n"
+        f"Я сохраню его по умолчанию для этой игры и пересоберу сообщение."
+    )
     await call.answer()
 @dp.message_handler(commands=["mark_published"])
 async def cmd_mark_published(message: types.Message):
