@@ -265,36 +265,38 @@ async def handle_text(message: types.Message):
     )
     await message.answer(draft_text, reply_markup=kb)
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("profit:"))
-async def cb_profit(call: types.CallbackQuery):
-    _, nid, profit = call.data.split(":", 2)
+@dp.message_handler(commands=["generate_listing"])
+async def cmd_generate_listing(message: types.Message):
+    args = message.get_args().split()
+    if len(args) < 2:
+        await message.answer("Использование: /generate_listing <id> <target_net>")
+        return
+
+    nid, target = args[0], args[1]
+    try:
+        target_f = float(target)
+    except Exception:
+        await message.answer("Неверный целевой профит.")
+        return
+
     rows = read_rows()
     row = next((r for r in rows if r["id"] == nid), None)
     if not row:
-        await call.answer("Лот не найден.", show_alert=True)
+        await message.answer("ID не найден.")
         return
 
-    if profit == "custom":
-        await call.message.answer(f"Введите /generate_listing {nid} <целевой_профит>\nПример: /generate_listing {nid} 1.5")
-        await call.answer()
-        return
-
-    try:
-        target = float(profit)
-    except:
-        target = 1.0
-
-        # считаем минимальную цену под выбранный профит
     min_sale = calc_min_sale(float(row["buy_price"]), target_net=target_f)
-txt = (
-    f"ID {nid} — {row['game']}\n"
-    f"Куплено: {row['buy_price']}$\n"
-    f"Целевой чистый профит: {target_f}$\n"
-    f"Мин. цена продажи: {min_sale}$\n\n"
-    "Описание для лота:\n"
-    f'Stirka | "{row["game"]}"'
-)
-    await message.answer(txt)    
+
+    txt = (
+        f"ID {nid} — {row['game']}\n"
+        f"Куплено: {row['buy_price']}$\n"
+        f"Целевой чистый профит: {target_f}$\n"
+        f"Мин. цена продажи: {min_sale}$\n\n"
+        "Описание для лота:\n"
+        f'Stirka | "{row["game"]}"'
+    )
+    await message.answer(txt)
+   
     await call.message.answer(listing_text)
     await call.answer()
 
@@ -436,6 +438,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
