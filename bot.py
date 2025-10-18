@@ -6,6 +6,9 @@ from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
+import asyncio
+
+FILE_LOCK = asyncio.Lock()
 
 # ==== ТОКЕН ТОЛЬКО ЗДЕСЬ: API_TOKEN ====
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -185,26 +188,29 @@ async def cmd_add_buy(message: types.Message):
         await message.answer("Неверный формат цены.")
         return
 
-    rows = read_rows()
-    nid = next_id(rows)
-    min_sale = calc_min_sale(price_f, target_net=1.0)
-    new = {
-        "id": str(nid),
-        "source_text": f"manual:{game}|{price_f}|{notes}",
-        "game": game,
-        "account_desc": "",
-        "buy_price": f"{price_f:.2f}",
-        "buy_date": datetime.utcnow().isoformat(),
-        "status": "in_stock",
-        "min_sale_for_target": f"{min_sale:.2f}",
-        "notes": notes,
-        "sell_price": "",
-        "sell_date": "",
-        "net_profit": ""
-    }
-    rows.append(new)
-    write_rows(rows)
+    async with FILE_LOCK:
+        rows = read_rows()
+        nid = next_id(rows)
+        min_sale = calc_min_sale(price_f, target_net=1.0)
+        new = {
+            "id": str(nid),
+            "source_text": f"manual:{game}|{price_f}|{notes}",
+            "game": game,
+            "account_desc": "",
+            "buy_price": f"{price_f:.2f}",
+            "buy_date": datetime.utcnow().isoformat(),
+            "status": "in_stock",
+            "min_sale_for_target": f"{min_sale:.2f}",
+            "notes": notes,
+            "sell_price": "",
+            "sell_date": "",
+            "net_profit": ""
+        }
+        rows.append(new)
+        write_rows(rows)
+
     await message.answer(f"Добавлен лот ID {nid} — {game} за {price_f}$\nМин. цена для $1: {min_sale}$")
+
 
 @dp.message_handler(commands=["list"])
 async def cmd_list(message: types.Message):
@@ -224,8 +230,6 @@ async def cmd_list(message: types.Message):
 )
 async def handle_text(message: types.Message):
     text = message.text.strip()
-
-    # 👉 если это команда, не обрабатываем тут — пусть сработает handler команды
     if text.startswith("/"):
         return
 
@@ -233,26 +237,25 @@ async def handle_text(message: types.Message):
     if not parsed["buy_price"]:
         return
 
-    rows = read_rows()
-    nid = next_id(rows)
-
-    # не считаем тут мин. цену, чтобы не светить её до выбора профита
-    new = {
-        "id": str(nid),
-        "source_text": parsed["source_text"],
-        "game": parsed["game"],
-        "account_desc": parsed["account_desc"],
-        "buy_price": f"{float(parsed['buy_price']):.2f}",
-        "buy_date": datetime.utcnow().isoformat(),
-        "status": "in_stock",
-        "min_sale_for_target": "",  # оставим пустым, рассчитаем позже после выбора профита
-        "notes": "",
-        "sell_price": "",
-        "sell_date": "",
-        "net_profit": ""
-    }
-    rows.append(new)
-    write_rows(rows)
+    async with FILE_LOCK:
+        rows = read_rows()
+        nid = next_id(rows)
+        new = {
+            "id": str(nid),
+            "source_text": parsed["source_text"],
+            "game": parsed["game"],
+            "account_desc": parsed["account_desc"],
+            "buy_price": f"{float(parsed['buy_price']):.2f}",
+            "buy_date": datetime.utcnow().isoformat(),
+            "status": "in_stock",
+            "min_sale_for_target": "",
+            "notes": "",
+            "sell_price": "",
+            "sell_date": "",
+            "net_profit": ""
+        }
+        rows.append(new)
+        write_rows(rows)
 
     kb = InlineKeyboardMarkup(row_width=4)
     kb.add(
@@ -274,6 +277,7 @@ async def handle_text(message: types.Message):
         "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
     )
     await message.answer(draft_text, reply_markup=kb)
+
 
 @dp.message_handler(commands=["generate_listing"])
 async def cmd_generate_listing(message: types.Message):
@@ -311,25 +315,30 @@ async def cmd_generate_listing(message: types.Message):
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("posted:"))
 async def cb_posted(call: types.CallbackQuery):
     _, nid = call.data.split(":", 1)
-    rows = read_rows()
-    row = next((r for r in rows if r["id"] == nid), None)
-    if not row:
-        await call.answer("Лот не найден.", show_alert=True)
-        return
-    row["status"] = "listed"
-    write_rows(rows)
+    async with FILE_LOCK:
+        rows = read_rows()
+        row = next((r for r in rows if r["id"] == nid), None)
+        if not row:
+            await call.answer("Лот не найден.", show_alert=True)
+            return
+        row["status"] = "listed"
+        write_rows(rows)
+
     await call.message.answer(f"Лот {nid} помечен как опубликованный.")
     await call.answer()
+
 
     
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("wipe:"))
 async def cb_wipe(call: types.CallbackQuery):
     if call.data == "wipe:yes":
-        reset_csv()
+        async with FILE_LOCK:
+            reset_csv()
         await call.message.answer("✅ Готово. База очищена (inventory.csv перезаписан заголовком).")
     else:
         await call.message.answer("Отменено.")
     await call.answer()
+
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("sold_direct:"))
@@ -381,14 +390,18 @@ async def cmd_mark_published(message: types.Message):
     if not nid:
         await message.answer("Использование: /mark_published <id>")
         return
-    rows = read_rows()
-    row = next((r for r in rows if r["id"] == nid), None)
-    if not row:
-        await message.answer("ID не найден.")
-        return
-    row["status"] = "listed"
-    write_rows(rows)
+
+    async with FILE_LOCK:
+        rows = read_rows()
+        row = next((r for r in rows if r["id"] == nid), None)
+        if not row:
+            await message.answer("ID не найден.")
+            return
+        row["status"] = "listed"
+        write_rows(rows)
+
     await message.answer(f"ID {nid} помечен как опубликованный.")
+
 
 @dp.message_handler(commands=["sold"])
 async def cmd_sold(message: types.Message):
@@ -402,18 +415,22 @@ async def cmd_sold(message: types.Message):
     except:
         await message.answer("Неверная цена.")
         return
-    rows = read_rows()
-    row = next((r for r in rows if r["id"] == nid), None)
-    if not row:
-        await message.answer("ID не найден.")
-        return
-    net = calc_net_from_sale(price_f, float(row["buy_price"]))
-    row["status"] = "sold"
-    row["sell_price"] = f"{price_f:.2f}"
-    row["sell_date"] = datetime.utcnow().isoformat()
-    row["net_profit"] = f"{net:.2f}"
-    write_rows(rows)
+
+    async with FILE_LOCK:
+        rows = read_rows()
+        row = next((r for r in rows if r["id"] == nid), None)
+        if not row:
+            await message.answer("ID не найден.")
+            return
+        net = calc_net_from_sale(price_f, float(row["buy_price"]))
+        row["status"] = "sold"
+        row["sell_price"] = f"{price_f:.2f}"
+        row["sell_date"] = datetime.utcnow().isoformat()
+        row["net_profit"] = f"{net:.2f}"
+        write_rows(rows)
+
     await message.answer(f"ID {nid} отмечен как проданный. Чистая прибыль: {net:.2f}$")
+
 
 @dp.message_handler(commands=["stats"])
 async def cmd_stats(message: types.Message):
@@ -477,6 +494,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
