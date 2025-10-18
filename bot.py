@@ -211,6 +211,11 @@ async def cmd_list(message: types.Message):
 @dp.message_handler(content_types=types.ContentType.TEXT)
 async def handle_text(message: types.Message):
     text = (message.text or "").strip()
+
+    # 👉 если это команда, не обрабатываем тут — пусть сработает handler команды
+    if text.startswith("/"):
+        return
+
     parsed = parse_notification(text)
     if not parsed["buy_price"]:
         return
@@ -430,6 +435,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
