@@ -30,6 +30,7 @@ HELP_TEXT = (
     "/stats — общая статистика\n"
     "/monthly YYYY-MM — статистика за месяц\n"
     "/export — экспорт CSV\n"
+    "/reset_stats — очистить базу (нужно подтверждение)\n"
 )
 
 async def set_bot_commands():
@@ -43,6 +44,7 @@ async def set_bot_commands():
         BotCommand("stats", "общая статистика"),
         BotCommand("monthly", "YYYY-MM"),
         BotCommand("export", "выгрузка CSV"),
+        BotCommand("reset_stats", "очистить базу (подтверждение)"),
     ]
     await bot.set_my_commands(commands)
 # ======================================
@@ -297,9 +299,6 @@ async def cmd_generate_listing(message: types.Message):
     )
     await message.answer(txt)
    
-    await call.message.answer(listing_text)
-    await call.answer()
-
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("posted:"))
 async def cb_posted(call: types.CallbackQuery):
@@ -311,6 +310,11 @@ async def cb_posted(call: types.CallbackQuery):
         return
     row["status"] = "listed"
     write_rows(rows)
+    def reset_csv():
+    """Перезаписывает inventory.csv, оставляя только заголовок."""
+    with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer.writeheader()
     await call.message.answer(f"Лот {nid} помечен как опубликованный.")
     await call.answer()
 
@@ -318,6 +322,15 @@ async def cb_posted(call: types.CallbackQuery):
 async def cb_sold_direct(call: types.CallbackQuery):
     _, nid = call.data.split(":", 1)
     await call.message.answer(f"Чтобы отметить лот {nid} как проданный, отправь: /sold {nid}|<цена_продажи>\nПример: /sold {nid}|10")
+    await call.answer()
+    
+    @dp.callback_query_handler(lambda c: c.data and c.data.startswith("wipe:"))
+async def cb_wipe(call: types.CallbackQuery):
+    if call.data == "wipe:yes":
+        reset_csv()
+        await call.message.answer("✅ Готово. База очищена (inventory.csv перезаписан заголовком).")
+    else:
+        await call.message.answer("Отменено.")
     await call.answer()
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("profit:"))
@@ -412,6 +425,18 @@ async def cmd_stats(message: types.Message):
         f"Суммарная чистая прибыль: {total_net:.2f}$\n"
     )
     await message.answer(text)
+@dp.message_handler(commands=["reset_stats"])
+async def cmd_reset_stats(message: types.Message):
+    kb = InlineKeyboardMarkup()
+    kb.add(
+        InlineKeyboardButton("Да, удалить ВСЁ", callback_data="wipe:yes"),
+        InlineKeyboardButton("Отмена", callback_data="wipe:no"),
+    )
+    await message.answer(
+        "⚠️ Подтвердите очистку базы.\n"
+        "Будут удалены ВСЕ записи (инвентарь и статистика) без возможности восстановления.",
+        reply_markup=kb
+    )
 
 @dp.message_handler(commands=["monthly"])
 async def cmd_monthly(message: types.Message):
@@ -446,6 +471,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
