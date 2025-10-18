@@ -399,8 +399,12 @@ async def wait_custom_profit(message: types.Message):
 
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
-@dp.message_handler(lambda m: m.text and not m.text.startswith('/'), content_types=types.ContentType.TEXT)
+@dp.message_handler(
+    lambda m: m.text and not m.text.startswith('/') and USER_STATE.get(m.from_user.id),
+    content_types=types.ContentType.TEXT,
+)
 async def handle_desc_or_profit(message: types.Message):
+    ...
     st = USER_STATE.get(message.from_user.id)
     if not st:
         return  # не наша ветка — дальше сработает твой общий парсер уведомлений
@@ -714,26 +718,7 @@ async def handle_edit_desc(message: types.Message):
 
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("editdesc:"))
-async def cb_editdesc(call: types.CallbackQuery):
-    _, nid = call.data.split(":", 1)
-    rows = read_rows()
-    row = next((r for r in rows if r["id"] == str(nid)), None)
-    if not row:
-        await call.answer("Лот не найден.", show_alert=True)
-        return
 
-    WAITING_DESC[call.message.chat.id] = {
-        "nid": str(nid),
-        "target": 0.0,
-        "min_sale": 0.0,
-        "game": row["game"],
-    }
-    await call.message.answer(
-        f"Отправьте новый текст описания для игры «{row['game']}».\n"
-        f"Я сохраню его по умолчанию для этой игры и пересоберу сообщение."
-    )
-    await call.answer()
 @dp.message_handler(commands=["mark_published"])
 async def cmd_mark_published(message: types.Message):
     nid = message.get_args().strip()
