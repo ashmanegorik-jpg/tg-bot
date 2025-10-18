@@ -217,7 +217,8 @@ async def handle_text(message: types.Message):
 
     rows = read_rows()
     nid = next_id(rows)
-    min_sale = calc_min_sale(parsed["buy_price"], target_net=1.0)
+
+    # не считаем тут мин. цену, чтобы не светить её до выбора профита
     new = {
         "id": str(nid),
         "source_text": parsed["source_text"],
@@ -226,7 +227,7 @@ async def handle_text(message: types.Message):
         "buy_price": f"{float(parsed['buy_price']):.2f}",
         "buy_date": datetime.utcnow().isoformat(),
         "status": "in_stock",
-        "min_sale_for_target": f"{min_sale:.2f}",
+        "min_sale_for_target": "",  # оставим пустым, рассчитаем позже после выбора профита
         "notes": "",
         "sell_price": "",
         "sell_date": "",
@@ -238,19 +239,20 @@ async def handle_text(message: types.Message):
     kb = InlineKeyboardMarkup(row_width=4)
     kb.add(
         InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
-        InlineKeyboardButton("Профит $1", callback_data=f"profit:{nid}:1"),
-        InlineKeyboardButton("Профит $2", callback_data=f"profit:{nid}:2"),
+        InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
+        InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
     )
     kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
-    kb.add(InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-           InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
 
     draft_text = (
         f"🆕 Новый лот (ID {nid})\n"
         f"Игра: {parsed['game']}\n"
         f"Описание: {parsed['account_desc']}\n"
-        f"Куплено за: {float(parsed['buy_price']):.2f}$\n"
-        f"Мин. цена для $1: {min_sale}$\n\n"
+        f"Куплено за: {float(parsed['buy_price']):.2f}$\n\n"
         "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
     )
     await message.answer(draft_text, reply_markup=kb)
@@ -424,6 +426,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
