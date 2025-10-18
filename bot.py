@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 
 # ==== ТОКЕН ТОЛЬКО ЗДЕСЬ: API_TOKEN ====
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -285,7 +285,6 @@ async def cb_profit(call: types.CallbackQuery):
         f"Куплено: {row['buy_price']}$\n"
         f"Целевой чистый профит: {target}$\n"
         f"Мин. цена продажи: {min_sale}$\n\n"
-        "Шаблон объявления:\n"
         "Описание для лота:\n"
         f'Stirka | "{row["game"]}"'
     )
@@ -431,6 +430,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
