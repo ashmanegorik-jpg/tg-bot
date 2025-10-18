@@ -320,34 +320,42 @@ async def cb_sold_direct(call: types.CallbackQuery):
     await call.message.answer(f"Чтобы отметить лот {nid} как проданный, отправь: /sold {nid}|<цена_продажи>\nПример: /sold {nid}|10")
     await call.answer()
 
-@dp.message_handler(commands=["generate_listing"])
-async def cmd_generate_listing(message: types.Message):
-    args = message.get_args().split()
-    if len(args) < 2:
-        await message.answer("Использование: /generate_listing <id> <target_net>")
-        return
-    nid, target = args[0], args[1]
-    try:
-        target_f = float(target)
-    except:
-        await message.answer("Неверный целевой профит.")
-        return
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("profit:"))
+async def cb_profit(call: types.CallbackQuery):
+    _, nid, profit = call.data.split(":", 2)
+
     rows = read_rows()
     row = next((r for r in rows if r["id"] == nid), None)
     if not row:
-        await message.answer("ID не найден.")
+        await call.answer("Лот не найден.", show_alert=True)
         return
-    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target_f)
-    txt = (
-        f"ID {nid} — {row['game']}\n"
-        f"Куплено за: {row['buy_price']}$\n"
-        f"Целевой чистый профит: {target_f}$\n"
-        f"Мин. цена продажи: {min_sale}$\n\n"
-        f"Шаблон объявления:\nЗаголовок: Аккаунт {row['game']} | Цена {min_sale}$\n"
-        f"Описание: - Куплен за {row['buy_price']}$; {row['account_desc'] or row['notes']}\n"
-    )
-    await message.answer(txt)
 
+    if profit == "custom":
+        await call.message.answer(
+            f"Введите /generate_listing {nid} <целевой_профит>\n"
+            f"Пример: /generate_listing {nid} 1.5"
+        )
+        await call.answer()
+        return
+
+    try:
+        target = float(profit)
+    except Exception:
+        target = 1.0
+
+    # минимальная цена под выбранный профит
+    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
+
+    listing_text = (
+        f"ID {nid} — {row['game']}\n"
+        f"Куплено: {row['buy_price']}$\n"
+        f"Целевой чистый профит: {target}$\n"
+        f"Мин. цена продажи: {min_sale}$\n\n"
+        "Описание для лота:\n"
+        f'Stirka | "{row["game"]}"'
+    )
+    await call.message.answer(listing_text)
+    await call.answer()
 @dp.message_handler(commands=["mark_published"])
 async def cmd_mark_published(message: types.Message):
     nid = message.get_args().strip()
@@ -438,6 +446,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
