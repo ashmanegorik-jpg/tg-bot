@@ -322,7 +322,7 @@ async def cb_posted(call: types.CallbackQuery):
     await call.answer()
 
     
- @dp.callback_query_handler(lambda c: c.data and c.data.startswith("wipe:"))
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("wipe:"))
 async def cb_wipe(call: types.CallbackQuery):
     if call.data == "wipe:yes":
         reset_csv()
@@ -477,6 +477,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
