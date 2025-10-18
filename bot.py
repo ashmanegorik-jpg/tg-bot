@@ -85,6 +85,12 @@ def write_rows(rows):
         writer.writeheader()
         writer.writerows(rows)
 
+def write_rows(rows):
+    with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(rows)
+
 def reset_csv():
     """Перезаписывает inventory.csv, оставляя только заголовок."""
     with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
@@ -476,6 +482,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
