@@ -126,7 +126,7 @@ def calc_net_from_sale(sale_price, buy_price):
 
 # ---- Парсер уведомления ----
 RE_LINK = re.compile(r'По вашей ссылке\s*["“](?P<link>[^"”]+)["”]', re.IGNORECASE)
-RE_BUYPRICE = re.compile(r'за\s*([\d\.,]+)\s*\$')
+RE_BUYPRICE = re.compile(r'за\s*(?:\$\s*)?([\d\.,]+)(?:\s*\$)?', re.IGNORECASE)
 RE_KUP = re.compile(r'куплен аккаунт\s*(?P<acc>.*?)\s*(?:В сети:|в сети:|за\s|$)', re.IGNORECASE)
 RE_GAME_QUOTE_FALLBACK = re.compile(r'["“](?P<g>[^"”]+)["”]')
 
