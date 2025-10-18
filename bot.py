@@ -399,8 +399,50 @@ async def wait_custom_profit(message: types.Message):
 
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
+# Пользователь ввёл описание после выбора фиксированного профита (0.5/1/2)
+@dp.message_handler(lambda m: USER_STATE.get(m.from_user.id, {}).get("mode") == "fixed_desc")
+async def wait_fixed_desc(message: types.Message):
+    st = USER_STATE.get(message.from_user.id)
+    if not st:
+        return
+
+    nid = st["nid"]
+    target = float(st["target"])
+    desc = (message.text or "").strip()
+    if not desc:
+        await message.answer("Опишите лот текстом, пожалуйста.")
+        return
+
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == str(nid)), None)
+    if not row:
+        USER_STATE.pop(message.from_user.id, None)
+        await message.answer("Лот не найден.")
+        return
+
+    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
+
+    # Запоминаем описание и в памяти, и в CSV
+    GAME_DEFAULT_DESC[row["game"]] = desc
+    save_description_for_game(row["game"], desc)
+
+    listing_text = compose_listing(row, nid, target, min_sale, desc)
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+
+    await message.answer(listing_text, reply_markup=kb)
+    USER_STATE.pop(message.from_user.id, None)
 @dp.message_handler(
-    lambda m: m.text and not m.text.startswith('/') and USER_STATE.get(m.from_user.id),
+    lambda m: (
+        m.text
+        and not m.text.startswith('/')
+        and USER_STATE.get(m.from_user.id, {}).get("mode") in ("custom_desc", "edit_desc", "await_profit_value")
+    ),
     content_types=types.ContentType.TEXT,
 )
 async def handle_desc_or_profit(message: types.Message):
@@ -574,7 +616,7 @@ async def cb_posted(call: types.CallbackQuery):
     
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("editdesc:"))
 async def cb_editdesc(call: types.CallbackQuery):
-    _, nid = c.data.split(":", 1)
+    _, nid = call.data.split(":", 1)
     rows = read_rows()
     row = next((r for r in rows if r["id"] == str(nid)), None)
     if not row:
