@@ -208,9 +208,12 @@ async def cmd_list(message: types.Message):
         text += f"ID {r['id']}: {r['game']} — buy {r['buy_price']}$ — status: {r['status']} — notes: {r['notes']}\n"
     await message.answer(text)
 
-@dp.message_handler(content_types=types.ContentType.TEXT)
+@dp.message_handler(
+    lambda m: (m.text is not None) and not m.text.startswith('/'),
+    content_types=types.ContentType.TEXT,
+)
 async def handle_text(message: types.Message):
-    text = (message.text or "").strip()
+    text = message.text.strip()
 
     # 👉 если это команда, не обрабатываем тут — пусть сработает handler команды
     if text.startswith("/"):
@@ -435,6 +438,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
