@@ -285,18 +285,16 @@ async def cb_profit(call: types.CallbackQuery):
         target = 1.0
 
         # считаем минимальную цену под выбранный профит
-    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
-
-    # НОВЫЙ текст ответа: только блок "Шаблон объявления" → "Описание для лота"
-    listing_text = (
-        f"ID {nid} — {row['game']}\n"
-        f"Куплено: {row['buy_price']}$\n"
-        f"Целевой чистый профит: {target}$\n"
-        f"Мин. цена продажи: {min_sale}$\n\n"
-        "Описание для лота:\n"
-        f'Stirka | "{row["game"]}"'
-    )
-
+    min_sale = calc_min_sale(float(row["buy_price"]), target_net=target_f)
+txt = (
+    f"ID {nid} — {row['game']}\n"
+    f"Куплено: {row['buy_price']}$\n"
+    f"Целевой чистый профит: {target_f}$\n"
+    f"Мин. цена продажи: {min_sale}$\n\n"
+    "Описание для лота:\n"
+    f'Stirka | "{row["game"]}"'
+)
+    await message.answer(txt)    
     await call.message.answer(listing_text)
     await call.answer()
 
@@ -438,6 +436,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
