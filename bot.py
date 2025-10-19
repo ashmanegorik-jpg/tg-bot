@@ -333,6 +333,7 @@ async def receive_description(message: types.Message):
         InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
         InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
     )
+    kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
 # 3.1. Пользователь вводит описание для кастомного профита
 @dp.message_handler(lambda m: USER_STATE.get(m.from_user.id, {}).get("mode") == "custom_desc")
@@ -396,7 +397,7 @@ async def wait_custom_profit(message: types.Message):
         InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
         InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
     )
-
+    kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
 # Пользователь ввёл описание после выбора фиксированного профита (0.5/1/2)
@@ -505,7 +506,7 @@ async def handle_desc_or_profit(message: types.Message):
             InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
             InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
         )
-
+        kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
         USER_STATE.pop(message.from_user.id, None)  # цепочка завершена
         await message.answer(listing_text, reply_markup=kb)
         return
@@ -699,6 +700,7 @@ async def cb_profit(call: types.CallbackQuery):
             InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
             InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
         )
+        kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
         await call.message.answer(listing_text, reply_markup=kb)
         await call.answer()
         return
@@ -711,6 +713,34 @@ async def cb_profit(call: types.CallbackQuery):
     )
     await call.answer()
 # Нажали "Изменить текст" — просим новый текст и помним выбранный профит
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("restored:"))
+async def cb_restored(call: types.CallbackQuery):
+    _, nid = call.data.split(":", 1)
+
+    async with FILE_LOCK:
+        rows = read_rows()
+        row = next((r for r in rows if r["id"] == str(nid)), None)
+        if not row:
+            await call.answer("Лот не найден.", show_alert=True)
+            return
+
+        if row["status"] == "sold":
+            await call.answer("Этот лот уже отмечен как проданный.", show_alert=True)
+            return
+        if row["status"] == "restored":
+            await call.answer("Этот лот уже отмечен как восстановленный.", show_alert=True)
+            return
+
+        loss = float(row["buy_price"])
+        row["status"] = "restored"
+        row["sell_price"] = ""
+        row["sell_date"] = datetime.utcnow().isoformat()
+        # фиксируем убыток отрицательным нетто, чтобы можно было считать итоги
+        row["net_profit"] = f"{-loss:.2f}"
+        write_rows(rows)
+
+    await call.message.answer(f"Лот {nid} помечен как восстановленный.\nПотеря: {loss:.2f}$")
+    await call.answer()
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("edit_desc:"))
 async def cb_edit_desc(call: types.CallbackQuery):
     _, nid, target = call.data.split(":", 2)
@@ -757,7 +787,8 @@ async def handle_edit_desc(message: types.Message):
         InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
         InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
     )
-
+    :
+kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
 
@@ -812,17 +843,30 @@ async def cmd_sold(message: types.Message):
 @dp.message_handler(commands=["stats"])
 async def cmd_stats(message: types.Message):
     rows = read_rows()
+
     bought_count = len(rows)
-    sold = [r for r in rows if r["status"] == "sold" and r["net_profit"]]
-    total_net = sum(float(r["net_profit"]) for r in sold) if sold else 0.0
-    total_spent = sum(float(r["buy_price"]) for r in rows)
+    total_spent = sum(float(r["buy_price"]) for r in rows if r.get("buy_price"))
+
+    sold = [r for r in rows if r["status"] == "sold" and r.get("net_profit")]
     sold_count = len(sold)
+    total_net_sales = sum(float(r["net_profit"]) for r in sold) if sold else 0.0  # чистая прибыль с продаж
+
+    restored = [r for r in rows if r["status"] == "restored"]
+    restored_count = len(restored)
+    total_losses = sum(float(r["buy_price"]) for r in restored)  # потери = цена покупки
+
+    # Итоговый финансовый результат = прибыль с продаж - потери от восстановленных
+    real_result = total_net_sales - total_losses
+
     text = (
-        f"Статистика:\n"
+        "Статистика:\n"
         f"Всего позиций: {bought_count}\n"
         f"Продано: {sold_count}\n"
+        f"Восстановлено: {restored_count}\n"
         f"Потрачено всего: {total_spent:.2f}$\n"
-        f"Суммарная чистая прибыль: {total_net:.2f}$\n"
+        f"Чистая прибыль с продаж: {total_net_sales:.2f}$\n"
+        f"Потери (восстановленные): {total_losses:.2f}$\n"
+        f"ИТОГ (прибыль - потери): {real_result:.2f}$\n"
     )
     await message.answer(text)
 @dp.message_handler(commands=["reset_stats"])
@@ -850,15 +894,25 @@ async def cmd_monthly(message: types.Message):
     except:
         await message.answer("Неверный формат. Пример: /monthly 2025-10")
         return
+
     rows = read_rows()
-    bought = [r for r in rows if r["buy_date"] and r["buy_date"].startswith(f"{year:04d}-{month:02d}")]
-    sold = [r for r in rows if r["sell_date"] and r["sell_date"].startswith(f"{year:04d}-{month:02d}")]
-    total_spent = sum(float(r["buy_price"]) for r in bought)
-    total_net = sum(float(r["net_profit"]) for r in sold if r["net_profit"])
+
+    bought = [r for r in rows if r.get("buy_date") and r["buy_date"].startswith(f"{year:04d}-{month:02d}")]
+    sold = [r for r in rows if r.get("sell_date") and r["sell_date"].startswith(f"{year:04d}-{month:02d}") and r["status"] == "sold"]
+    restored = [r for r in rows if r.get("sell_date") and r["sell_date"].startswith(f"{year:04d}-{month:02d}") and r["status"] == "restored"]
+
+    total_spent = sum(float(r["buy_price"]) for r in bought if r.get("buy_price"))
+    total_net_sales = sum(float(r["net_profit"]) for r in sold if r.get("net_profit"))
+    total_losses = sum(float(r["buy_price"]) for r in restored if r.get("buy_price"))
+
+    real_result = total_net_sales - total_losses
+
     res = (
         f"Месяц {year}-{month:02d}:\n"
         f"Куплено: {len(bought)} шт., потрачено: {total_spent:.2f}$\n"
-        f"Продано: {len(sold)} шт., чистая прибыль: {total_net:.2f}$\n"
+        f"Продано: {len(sold)} шт., чистая прибыль: {total_net_sales:.2f}$\n"
+        f"Восстановлено: {len(restored)} шт., потери: {total_losses:.2f}$\n"
+        f"ИТОГ (прибыль - потери): {real_result:.2f}$\n"
     )
     await message.answer(res)
 
