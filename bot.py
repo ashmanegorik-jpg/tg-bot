@@ -435,7 +435,7 @@ async def wait_fixed_desc(message: types.Message):
         InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
         InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
     )
-
+    kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
 @dp.message_handler(
