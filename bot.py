@@ -60,7 +60,7 @@ async def set_bot_commands():
 API_TOKEN = os.getenv("BOT_TOKEN")  # ВАЖНО: читаем BOT_TOKEN (как в Render)
 DATA_CSV = os.path.join(os.path.dirname(__file__), "inventory.csv")
 COMMISSION = 0.06  # 6% (3% продажа + 3% вывод)
-PRICE_ENDING = ".99"  # варианты: ".99" или ".49"
+PRICE_ENDING = "tenth_9"  # округление к следующей десятичной, затем -0.01
 # ==============================
 
 if not API_TOKEN:
@@ -187,20 +187,37 @@ def calc_net_from_sale(sale_price, buy_price):
     received = sale * (Decimal("1") - Decimal(str(COMMISSION)))
     net = received - buy
     return float(net.quantize(Decimal("0.01")))
+from decimal import Decimal
+
 def apply_psychological_ending(amount, ending=PRICE_ENDING):
     """
-    Округляет ВВЕРХ к ближайшей цене, оканчивающейся на ending ('.99' или '.49').
-    Сохраняет 2 знака после запятой.
-    Примеры:
-      6.38 -> 6.99 (для ".99"), 6.38 -> 6.49 (для ".49")
-      6.99 -> 6.99 (уже оканчивается как надо)
+    Режимы:
+      ending == "tenth_9": всегда округлить ВВЕРХ к следующей 0.1, затем -0.01
+        3.66 -> 3.69, 6.30 -> 6.39, 2.00 -> 2.09, 3.69 -> 3.69
+      ending in (".99", ".49"): как раньше — к ближайшему следующему X.99 или X.49
     """
     try:
         d = Decimal(str(amount)).quantize(Decimal("0.01"))
     except Exception:
         return float(amount)
-    if ending not in (".99", ".49"):
-        return float(d)
+
+    if ending == "tenth_9":
+        # работаем в центах, чтобы не ловить двоичную арифметику
+        cents = int(d * 100)                              # 3.66 -> 366
+        next_tenth_cents = ((cents + 9) // 10) * 10       # ceil до множителя 10 центов: 366 -> 370
+        candidate_cents = next_tenth_cents - 1            # 370 - 1 = 369 -> 3.69
+        return float(Decimal(candidate_cents) / Decimal(100))
+
+    if ending in (".99", ".49"):
+        end = Decimal(ending)
+        int_part = int(d)                                 # целая часть вниз
+        candidate = Decimal(int_part) + end               # 6.38 -> 6.99 / 6.49
+        if candidate < d:
+            candidate = Decimal(int_part + 1) + end
+        return float(candidate.quantize(Decimal("0.01")))
+
+    # по умолчанию — ничего не делаем
+    return float(d)
 
     end = Decimal(ending)
     int_part = int(d)  # целая часть вниз
