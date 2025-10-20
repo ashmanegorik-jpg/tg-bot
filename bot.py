@@ -60,6 +60,7 @@ async def set_bot_commands():
 API_TOKEN = os.getenv("BOT_TOKEN")  # ВАЖНО: читаем BOT_TOKEN (как в Render)
 DATA_CSV = os.path.join(os.path.dirname(__file__), "inventory.csv")
 COMMISSION = 0.06  # 6% (3% продажа + 3% вывод)
+PRICE_ENDING = ".99"  # варианты: ".99" или ".49"
 # ==============================
 
 if not API_TOKEN:
@@ -186,6 +187,27 @@ def calc_net_from_sale(sale_price, buy_price):
     received = sale * (Decimal("1") - Decimal(str(COMMISSION)))
     net = received - buy
     return float(net.quantize(Decimal("0.01")))
+def apply_psychological_ending(amount, ending=PRICE_ENDING):
+    """
+    Округляет ВВЕРХ к ближайшей цене, оканчивающейся на ending ('.99' или '.49').
+    Сохраняет 2 знака после запятой.
+    Примеры:
+      6.38 -> 6.99 (для ".99"), 6.38 -> 6.49 (для ".49")
+      6.99 -> 6.99 (уже оканчивается как надо)
+    """
+    try:
+        d = Decimal(str(amount)).quantize(Decimal("0.01"))
+    except Exception:
+        return float(amount)
+    if ending not in (".99", ".49"):
+        return float(d)
+
+    end = Decimal(ending)
+    int_part = int(d)  # целая часть вниз
+    candidate = Decimal(int_part) + end
+    if candidate < d:
+        candidate = Decimal(int_part + 1) + end
+    return float(candidate.quantize(Decimal("0.01")))
 def get_description_for_game(game: str) -> str:
     return GAME_DEFAULT_DESC.get(game)
 
@@ -271,6 +293,7 @@ async def cmd_add_buy(message: types.Message):
         rows = read_rows()
         nid = next_id(rows)
         min_sale = calc_min_sale(price_f, target_net=1.0)
+        min_sale = apply_psychological_ending(min_sale_raw)
         new = {
             "id": str(nid),
             "source_text": f"manual:{game}|{price_f}|{notes}",
@@ -377,7 +400,7 @@ async def wait_custom_profit(message: types.Message):
 
     # посчитаем минимальную цену
     min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
-
+    min_sale = apply_psychological_ending(min_sale_raw)
     # запомним описание для этой игры на будущее
     GAME_DEFAULT_DESC[row["game"]] = desc
 
@@ -422,7 +445,7 @@ async def wait_fixed_desc(message: types.Message):
         return
 
     min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
-
+    min_sale = apply_psychological_ending(min_sale_raw)
     # Запоминаем описание и в памяти, и в CSV
     GAME_DEFAULT_DESC[row["game"]] = desc
     save_description_for_game(row["game"], desc)
@@ -496,6 +519,7 @@ async def handle_desc_or_profit(message: types.Message):
             return
 
         min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
+        min_sale = apply_psychological_ending(min_sale_raw)
         desc = get_description_for_game(row["game"]) or f'Stirka | "{row["game"]}"'
 
         listing_text = compose_listing(row, nid, target, min_sale, desc)
@@ -586,7 +610,7 @@ async def cmd_generate_listing(message: types.Message):
         return
 
     min_sale = calc_min_sale(float(row["buy_price"]), target_net=target_f)
-
+    min_sale = apply_psychological_ending(min_sale_raw)
     txt = (
         f"ID {nid} — {row['game']}\n"
         f"Куплено: {row['buy_price']}$\n"
@@ -682,7 +706,7 @@ async def cb_profit(call: types.CallbackQuery):
         target = 1.0
 
     min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
-
+    min_sale = apply_psychological_ending(min_sale_raw)
     # Пробуем найти сохранённое описание для этой игры
     saved_desc = GAME_DEFAULT_DESC.get(row["game"])
     if saved_desc:
@@ -770,6 +794,7 @@ async def handle_edit_desc(message: types.Message):
         return
 
     min_sale = calc_min_sale(float(row["buy_price"]), target_net=target)
+    min_sale = apply_psychological_ending(min_sale_raw)
     GAME_DEFAULT_DESC[row["game"]] = desc
 
     listing_text = (
