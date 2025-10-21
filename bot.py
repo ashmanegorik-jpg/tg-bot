@@ -337,10 +337,21 @@ async def cmd_list(message: types.Message):
     if not in_stock:
         await message.answer("Нет лотов в наличии.")
         return
-    text = "Лоты в наличии:\n"
+
+    lines = []
     for r in in_stock:
-        text += f"ID {r['id']}: {r['game']} — buy {r['buy_price']}$ — status: {r['status']} — notes: {r['notes']}\n"
-    await message.answer(text)
+        # описание берём из базы шаблонов / памяти; если нет — fallback
+        desc = get_description_for_game(r["game"]) or r["account_desc"] or f'Stirka | "{r["game"]}"'
+        # цена продажи — это сохранённая мин. цена; если пусто, не ломаемся
+        sale = r["min_sale_for_target"].strip() if r.get("min_sale_for_target") else ""
+        if sale:
+            lines.append(f'ID {r["id"]} — {desc} — {sale}$')
+        else:
+            # если цена ещё не выбрана, просто покажем без неё
+            lines.append(f'ID {r["id"]} — {desc}')
+
+    await message.answer("Лоты в наличии:\n" + "\n".join(lines))
+
 @dp.message_handler(lambda m: (m.text is not None) and m.chat.id in WAITING_DESC, content_types=types.ContentType.TEXT)
 async def receive_description(message: types.Message):
     ctx = WAITING_DESC.pop(message.chat.id, None)
@@ -418,6 +429,9 @@ async def wait_custom_profit(message: types.Message):
     min_sale = apply_psychological_ending(
     calc_min_sale(float(row["buy_price"]), target_net=target)
     )
+    row["min_sale_for_target"] = f"{min_sale:.2f}"
+   write_rows(rows)
+
     # запомним описание для этой игры на будущее
     GAME_DEFAULT_DESC[row["game"]] = desc
 
@@ -464,6 +478,9 @@ async def wait_fixed_desc(message: types.Message):
     min_sale = apply_psychological_ending(
     calc_min_sale(float(row["buy_price"]), target_net=target)
     )
+    row["min_sale_for_target"] = f"{min_sale:.2f}"
+   write_rows(rows)
+
     # Запоминаем описание и в памяти, и в CSV
     GAME_DEFAULT_DESC[row["game"]] = desc
     save_description_for_game(row["game"], desc)
@@ -539,6 +556,9 @@ async def handle_desc_or_profit(message: types.Message):
         min_sale = apply_psychological_ending(
     calc_min_sale(float(row["buy_price"]), target_net=target)
     )
+        row["min_sale_for_target"] = f"{min_sale:.2f}"
+       write_rows(rows)
+
         desc = get_description_for_game(row["game"]) or f'Stirka | "{row["game"]}"'
 
         listing_text = compose_listing(row, nid, target, min_sale, desc)
@@ -728,9 +748,13 @@ async def cb_profit(call: types.CallbackQuery):
     min_sale = apply_psychological_ending(
     calc_min_sale(float(row["buy_price"]), target_net=target)
     )
+
     # Пробуем найти сохранённое описание для этой игры
     saved_desc = GAME_DEFAULT_DESC.get(row["game"])
     if saved_desc:
+        row["min_sale_for_target"] = f"{min_sale:.2f}"
+       write_rows(rows)
+
         listing_text = (
             f"ID {nid} — {row['game']}\n"
             f"Куплено: {row['buy_price']}$\n"
@@ -972,6 +996,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
