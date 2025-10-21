@@ -347,18 +347,18 @@ async def cmd_add_buy(message: types.Message):
 @dp.message_handler(commands=["list"])
 async def cmd_list(message: types.Message):
     rows = read_rows()
-    in_stock = [r for r in rows if r["status"] in ("in_stock", "listed")]
+    in_stock = [r for r in rows if r.get("status") in ("in_stock", "listed")]
     if not in_stock:
         await message.answer("Нет лотов в наличии.")
         return
 
-        lines = []
+    lines = []
     for r in in_stock:
         base_desc = get_description_for_game(r["game"]) or r["account_desc"] or f'Stirka | "{r["game"]}"'
         alias = (r.get("alias") or "").lower()
         display_desc = f"{alias} | {base_desc}" if alias else base_desc
 
-        sale = r["min_sale_for_target"].strip() if r.get("min_sale_for_target") else ""
+        sale = (r.get("min_sale_for_target") or "").strip()
         if sale:
             lines.append(f'ID {r["id"]} — {display_desc} — {sale}$')
         else:
