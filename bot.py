@@ -683,7 +683,22 @@ async def cb_profit(call: types.CallbackQuery):
     await call.message.answer(listing_text, reply_markup=kb)
     await call.answer()
 
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("posted:"))
+async def cb_posted(call: types.CallbackQuery):
+    _, nid = call.data.split(":", 1)
 
+    async with FILE_LOCK:
+        rows = read_rows()
+        row = next((r for r in rows if r["id"] == str(nid)), None)
+        if not row:
+            await call.answer("Лот не найден.", show_alert=True)
+            return
+
+        row["status"] = "listed"
+        write_rows(rows)
+
+    await call.message.answer(f"Лот {nid} помечен как опубликованный.")
+    await call.answer()
     
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("editdesc:"))
 async def cb_editdesc(call: types.CallbackQuery):
