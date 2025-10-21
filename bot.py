@@ -425,7 +425,7 @@ async def wait_custom_profit(message: types.Message):
         await message.answer("Лот не найден.")
         return
 
-       # посчитаем минимальную цену и сразу сохраним её в CSV
+    # посчитаем минимальную цену и сразу сохраним её в CSV
     min_sale = apply_psychological_ending(
         calc_min_sale(float(row["buy_price"]), target_net=target)
     )
@@ -477,7 +477,7 @@ async def wait_fixed_desc(message: types.Message):
         return
 
      min_sale = apply_psychological_ending(
-        calc_min_sale(float(row["buy_price"]), target_net=target)
+         calc_min_sale(float(row["buy_price"]), target_net=target)
      )
      row["min_sale_for_target"] = f"{min_sale:.2f}"
      write_rows(rows)
@@ -556,7 +556,7 @@ async def handle_desc_or_profit(message: types.Message):
             return
 
          min_sale = apply_psychological_ending(
-            calc_min_sale(float(row["buy_price"]), target_net=target)
+             calc_min_sale(float(row["buy_price"]), target_net=target)
          )
          row["min_sale_for_target"] = f"{min_sale:.2f}"
          write_rows(rows)
@@ -755,7 +755,7 @@ async def cb_profit(call: types.CallbackQuery):
 
     # Пробуем найти сохранённое описание для этой игры
     saved_desc = GAME_DEFAULT_DESC.get(row["game"])
-        saved_desc = GAME_DEFAULT_DESC.get(row["game"])
+    saved_desc = GAME_DEFAULT_DESC.get(row["game"])
     if saved_desc:
         row["min_sale_for_target"] = f"{min_sale:.2f}"
         write_rows(rows)
@@ -1002,6 +1002,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
