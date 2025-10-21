@@ -476,11 +476,11 @@ async def wait_fixed_desc(message: types.Message):
         await message.answer("Лот не найден.")
         return
 
-     min_sale = apply_psychological_ending(
+    min_sale = apply_psychological_ending(
          calc_min_sale(float(row["buy_price"]), target_net=target)
-     )
-     row["min_sale_for_target"] = f"{min_sale:.2f}"
-     write_rows(rows)
+    )
+    row["min_sale_for_target"] = f"{min_sale:.2f}"
+    write_rows(rows)
 
 
     # Запоминаем описание и в памяти, и в CSV
@@ -555,11 +555,11 @@ async def handle_desc_or_profit(message: types.Message):
             await message.answer("ID не найден. Начните заново.")
             return
 
-         min_sale = apply_psychological_ending(
+        min_sale = apply_psychological_ending(
              calc_min_sale(float(row["buy_price"]), target_net=target)
-         )
-         row["min_sale_for_target"] = f"{min_sale:.2f}"
-         write_rows(rows)
+        )
+        row["min_sale_for_target"] = f"{min_sale:.2f}"
+        write_rows(rows)
 
 
 
@@ -754,7 +754,6 @@ async def cb_profit(call: types.CallbackQuery):
     )
 
     # Пробуем найти сохранённое описание для этой игры
-    saved_desc = GAME_DEFAULT_DESC.get(row["game"])
     saved_desc = GAME_DEFAULT_DESC.get(row["game"])
     if saved_desc:
         row["min_sale_for_target"] = f"{min_sale:.2f}"
