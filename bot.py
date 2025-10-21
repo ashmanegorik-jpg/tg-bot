@@ -426,11 +426,13 @@ async def wait_custom_profit(message: types.Message):
         return
 
     # посчитаем минимальную цену
-    min_sale = apply_psychological_ending(
+   # посчитаем минимальную цену
+min_sale = apply_psychological_ending(
     calc_min_sale(float(row["buy_price"]), target_net=target)
-    )
-    row["min_sale_for_target"] = f"{min_sale:.2f}"
-   write_rows(rows)
+)
+row["min_sale_for_target"] = f"{min_sale:.2f}"
+write_rows(rows)   # <= ДОЛЖЕН быть на том же уровне отступа, что и строка выше
+
 
     # запомним описание для этой игры на будущее
     GAME_DEFAULT_DESC[row["game"]] = desc
@@ -477,9 +479,10 @@ async def wait_fixed_desc(message: types.Message):
 
     min_sale = apply_psychological_ending(
     calc_min_sale(float(row["buy_price"]), target_net=target)
-    )
-    row["min_sale_for_target"] = f"{min_sale:.2f}"
-   write_rows(rows)
+)
+row["min_sale_for_target"] = f"{min_sale:.2f}"
+write_rows(rows)   # <= тот же уровень отступа
+
 
     # Запоминаем описание и в памяти, и в CSV
     GAME_DEFAULT_DESC[row["game"]] = desc
@@ -555,9 +558,10 @@ async def handle_desc_or_profit(message: types.Message):
 
         min_sale = apply_psychological_ending(
     calc_min_sale(float(row["buy_price"]), target_net=target)
-    )
-        row["min_sale_for_target"] = f"{min_sale:.2f}"
-       write_rows(rows)
+)
+row["min_sale_for_target"] = f"{min_sale:.2f}"
+write_rows(rows)   # <= тот же уровень
+
 
         desc = get_description_for_game(row["game"]) or f'Stirka | "{row["game"]}"'
 
@@ -752,10 +756,10 @@ async def cb_profit(call: types.CallbackQuery):
     # Пробуем найти сохранённое описание для этой игры
     saved_desc = GAME_DEFAULT_DESC.get(row["game"])
     if saved_desc:
-        row["min_sale_for_target"] = f"{min_sale:.2f}"
-       write_rows(rows)
-
-        listing_text = (
+    row["min_sale_for_target"] = f"{min_sale:.2f}"
+    write_rows(rows)   # <= тот же уровень
+    listing_text = (
+        f"ID {nid} — {row['game']}\n"
             f"ID {nid} — {row['game']}\n"
             f"Куплено: {row['buy_price']}$\n"
             f"Целевой чистый профит: {target}$\n"
@@ -996,6 +1000,7 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+
 
 
 
