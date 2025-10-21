@@ -504,85 +504,7 @@ async def wait_fixed_desc(message: types.Message):
     kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
-@dp.message_handler(
-    lambda m: (
-        m.text
-        and not m.text.startswith('/')
-        and USER_STATE.get(m.from_user.id, {}).get("mode") in ("custom_desc", "edit_desc", "await_profit_value")
-    ),
-    content_types=types.ContentType.TEXT,
-)
-async def handle_desc_or_profit(message: types.Message):
-    ...
-    st = USER_STATE.get(message.from_user.id)
-    if not st:
-        return  # не наша ветка — дальше сработает твой общий парсер уведомлений
 
-    text = message.text.strip()
-    nid = st.get("nid")
-
-    # 1) Пользователь только что ввёл ОПИСАНИЕ
-    if st.get("mode") in ("custom_desc", "edit_desc"):
-        rows = read_rows()
-        row = next((r for r in rows if r["id"] == str(nid)), None)
-        if not row:
-            USER_STATE.pop(message.from_user.id, None)
-            await message.answer("ID не найден. Начните заново.")
-            return
-
-        # Сохраняем описание как шаблон для этой игры
-        set_description_for_game(row["game"], text)
-
-        # Просим выбрать профит (или ввести своё число)
-        kb = InlineKeyboardMarkup(row_width=3)
-        kb.add(
-            InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
-            InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
-            InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
-        )
-        kb.add(InlineKeyboardButton("Другая сумма", callback_data=f"enterprofit:{nid}"))
-
-        USER_STATE[message.from_user.id] = {"mode": "wait_profit", "nid": nid}
-        await message.answer("Теперь выберите размер профита:", reply_markup=kb)
-        return
-
-    # 2) Пользователь вводит ЧИСЛО профита (после кнопки «Другая сумма»)
-    if st.get("mode") == "await_profit_value":
-        try:
-            target = float(text.replace(",", "."))
-        except Exception:
-            await message.answer("Не понял число. Введите, например: 1.5")
-            return
-
-        rows = read_rows()
-        row = next((r for r in rows if r["id"] == str(nid)), None)
-        if not row:
-            USER_STATE.pop(message.from_user.id, None)
-            await message.answer("ID не найден. Начните заново.")
-            return
-
-        min_sale = apply_psychological_ending(
-             calc_min_sale(float(row["buy_price"]), target_net=target)
-        )
-        row["min_sale_for_target"] = f"{min_sale:.2f}"
-        write_rows(rows)
-
-
-
-        desc = get_description_for_game(row["game"]) or f'Stirka | "{row["game"]}"'
-
-        listing_text = compose_listing(row, nid, target, min_sale, desc)
-
-        kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"editdesc:{nid}"))
-        kb.add(
-            InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-            InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-        )
-        kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
-        USER_STATE.pop(message.from_user.id, None)  # цепочка завершена
-        await message.answer(listing_text, reply_markup=kb)
-        return
 @dp.message_handler(
     lambda m: (m.text is not None) and not m.text.startswith('/') and m.chat.id not in WAITING_DESC,
     content_types=types.ContentType.TEXT,
@@ -791,64 +713,7 @@ async def cb_sold_direct(call: types.CallbackQuery):
     await call.answer()
     
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("profit:"))
-async def cb_profit(call: types.CallbackQuery):
-    _, nid, profit = call.data.split(":", 2)
 
-    rows = read_rows()
-    row = next((r for r in rows if r["id"] == str(nid)), None)
-    if not row:
-        await call.answer("Лот не найден.", show_alert=True)
-        return
-
-    if profit == "custom":
-        # сначала попросим описание, потом спросим кастомный профит
-        # попробуем подсказать сохранённый шаблон, если он уже есть
-        saved = GAME_DEFAULT_DESC.get(row["game"])
-        hint = f'\n(для "{row["game"]}" у меня уже есть шаблон: {saved})' if saved else ""
-        USER_STATE[call.from_user.id] = {"mode": "custom_desc", "nid": nid}
-        await call.message.answer(
-            "Введите желаемый текст для описания лота." + hint + "\n(после этого я спрошу размер профита)"
-        )
-        await call.answer()
-        return
-
-    try:
-        target = float(profit)
-    except Exception:
-        target = 1.0
-
-    min_sale = apply_psychological_ending(
-    calc_min_sale(float(row["buy_price"]), target_net=target)
-    )
-
-    # Пробуем найти сохранённое описание для этой игры
-    saved_desc = GAME_DEFAULT_DESC.get(row["game"])
-    if saved_desc:
-        row["min_sale_for_target"] = f"{min_sale:.2f}"
-        write_rows(rows)
-
-        listing_text = compose_listing(row, nid, target, min_sale, saved_desc)
-        kb = InlineKeyboardMarkup()
-        kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
-        kb.add(
-            InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-            InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-        )
-        kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
-        await call.message.answer(listing_text, reply_markup=kb)
-        await call.answer()
-        return
-
-
-    # Если сохранённого описания нет — просим ввести
-    USER_STATE[call.from_user.id] = {"mode": "fixed_desc", "nid": nid, "target": target}
-    await call.message.answer(
-        f"Введите желаемый текст для описания лота для игры «{row['game']}». "
-        f"После отправки я подставлю его в шаблон и запомню для этой игры."
-    )
-    await call.answer()
-# Нажали "Изменить текст" — просим новый текст и помним выбранный профит
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("restored:"))
 async def cb_restored(call: types.CallbackQuery):
     _, nid = call.data.split(":", 1)
