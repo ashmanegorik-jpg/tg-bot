@@ -504,12 +504,60 @@ async def wait_fixed_desc(message: types.Message):
     kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
-
 @dp.message_handler(
-    lambda m: (m.text is not None) and not m.text.startswith('/') and m.chat.id not in WAITING_DESC,
+    lambda m: USER_STATE.get(m.from_user.id, {}).get("mode") == "await_profit_value",
+    content_types=types.ContentType.TEXT,
+)
+async def handle_custom_profit_value(message: types.Message):
+    st = USER_STATE.get(message.from_user.id)
+    if not st:
+        return
+    nid = st["nid"]
+
+    text = (message.text or "").strip()
+    try:
+        target = float(text.replace(",", "."))
+    except Exception:
+        await message.answer("Не понял число. Введите, например: 1.5")
+        return
+
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == str(nid)), None)
+    if not row:
+        USER_STATE.pop(message.from_user.id, None)
+        await message.answer("ID не найден. Начните заново.")
+        return
+
+    min_sale = apply_psychological_ending(
+        calc_min_sale(float(row["buy_price"]), target_net=target)
+    )
+    row["min_sale_for_target"] = f"{min_sale:.2f}"
+    write_rows(rows)
+
+    desc = row["game"]  # без ввода описания — просто название игры
+    listing_text = compose_listing(row, nid, target, min_sale, desc)
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+    kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
+
+    USER_STATE.pop(message.from_user.id, None)
+    await message.answer(listing_text, reply_markup=kb)
+@dp.message_handler(
+    lambda m: (
+        m.text is not None
+        and not m.text.startswith('/')
+        and m.chat.id not in WAITING_DESC
+        and USER_STATE.get(m.from_user.id, {}).get("mode") is None  # <— важно
+    ),
     content_types=types.ContentType.TEXT,
 )
 async def handle_text(message: types.Message):
+    ...
     text = message.text.strip()
     if text.startswith("/"):
         return
@@ -652,49 +700,6 @@ async def cb_editdesc(call: types.CallbackQuery):
     await call.message.answer(f'Введите новый текст для описания лота для «{row["game"]}».{hint}')
     await call.answer()
 
-@dp.message_handler(
-    lambda m: USER_STATE.get(m.from_user.id, {}).get("mode") == "await_profit_value",
-    content_types=types.ContentType.TEXT,
-)
-async def handle_custom_profit_value(message: types.Message):
-    st = USER_STATE.get(message.from_user.id)
-    if not st:
-        return
-    nid = st["nid"]
-
-    text = (message.text or "").strip()
-    try:
-        target = float(text.replace(",", "."))
-    except Exception:
-        await message.answer("Не понял число. Введите, например: 1.5")
-        return
-
-    rows = read_rows()
-    row = next((r for r in rows if r["id"] == str(nid)), None)
-    if not row:
-        USER_STATE.pop(message.from_user.id, None)
-        await message.answer("ID не найден. Начните заново.")
-        return
-
-    min_sale = apply_psychological_ending(
-        calc_min_sale(float(row["buy_price"]), target_net=target)
-    )
-    row["min_sale_for_target"] = f"{min_sale:.2f}"
-    write_rows(rows)
-
-    desc = row["game"]  # без ввода описания — просто название игры
-    listing_text = compose_listing(row, nid, target, min_sale, desc)
-
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
-    kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-    )
-    kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
-
-    USER_STATE.pop(message.from_user.id, None)
-    await message.answer(listing_text, reply_markup=kb)
         
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("wipe:"))
 async def cb_wipe(call: types.CallbackQuery):
