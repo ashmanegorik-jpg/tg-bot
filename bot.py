@@ -354,9 +354,8 @@ async def cmd_list(message: types.Message):
 
     lines = []
     for r in in_stock:
-        base_desc = get_description_for_game(r["game"]) or r["account_desc"] or f'Stirka | "{r["game"]}"'
         alias = (r.get("alias") or "").lower()
-        display_desc = f"{alias} | {base_desc}" if alias else base_desc
+        display_desc = f"{alias} | {r['game']}" if alias else r['game']
 
         sale = (r.get("min_sale_for_target") or "").strip()
         if sale:
@@ -663,26 +662,55 @@ async def cmd_generate_listing(message: types.Message):
         return
 
     min_sale = apply_psychological_ending(
-    calc_min_sale(float(row["buy_price"]), target_net=target_f)
+        calc_min_sale(float(row["buy_price"]), target_net=target_f)
     )
-    desc_default = get_description_for_game(row["game"]) or f'Stirka | "{row["game"]}"'
+    desc_default = row["game"]  # <— только название игры
     txt = compose_listing(row, nid, target_f, min_sale, desc_default)
     await message.answer(txt)
    
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("posted:"))
-async def cb_posted(call: types.CallbackQuery):
-    _, nid = call.data.split(":", 1)
-    async with FILE_LOCK:
-        rows = read_rows()
-        row = next((r for r in rows if r["id"] == nid), None)
-        if not row:
-            await call.answer("Лот не найден.", show_alert=True)
-            return
-        row["status"] = "listed"
-        write_rows(rows)
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("profit:"))
+async def cb_profit(call: types.CallbackQuery):
+    _, nid, profit = call.data.split(":", 2)
 
-    await call.message.answer(f"Лот {nid} помечен как опубликованный.")
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == str(nid)), None)
+    if not row:
+        await call.answer("Лот не найден.", show_alert=True)
+        return
+
+    # Если пользователь выбрал Custom — просто просим ввести число профита
+    if profit == "custom":
+        USER_STATE[call.from_user.id] = {"mode": "await_profit_value", "nid": nid}
+        await call.message.answer("Введите желаемый профит числом, например: 1.5")
+        await call.answer()
+        return
+
+    # Фиксированные варианты (0.5 / 1 / 2)
+    try:
+        target = float(profit)
+    except Exception:
+        target = 1.0
+
+    min_sale = apply_psychological_ending(
+        calc_min_sale(float(row["buy_price"]), target_net=target)
+    )
+    row["min_sale_for_target"] = f"{min_sale:.2f}"
+    write_rows(rows)
+
+    # Текст описания теперь всегда = название игры (alias подставится в compose_listing)
+    desc = row["game"]
+    listing_text = compose_listing(row, nid, target, min_sale, desc)
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+    kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
+
+    await call.message.answer(listing_text, reply_markup=kb)
     await call.answer()
 
 
@@ -702,12 +730,49 @@ async def cb_editdesc(call: types.CallbackQuery):
     await call.message.answer(f'Введите новый текст для описания лота для «{row["game"]}».{hint}')
     await call.answer()
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("enterprofit:"))
-async def cb_enterprofit(call: types.CallbackQuery):
-    _, nid = call.data.split(":", 1)
-    USER_STATE[call.from_user.id] = {"mode": "await_profit_value", "nid": nid}
-    await call.message.answer("Введите желаемый профит числом, например: 1.5")
-    await call.answer()
+@dp.message_handler(
+    lambda m: USER_STATE.get(m.from_user.id, {}).get("mode") == "await_profit_value",
+    content_types=types.ContentType.TEXT,
+)
+async def handle_custom_profit_value(message: types.Message):
+    st = USER_STATE.get(message.from_user.id)
+    if not st:
+        return
+    nid = st["nid"]
+
+    text = (message.text or "").strip()
+    try:
+        target = float(text.replace(",", "."))
+    except Exception:
+        await message.answer("Не понял число. Введите, например: 1.5")
+        return
+
+    rows = read_rows()
+    row = next((r for r in rows if r["id"] == str(nid)), None)
+    if not row:
+        USER_STATE.pop(message.from_user.id, None)
+        await message.answer("ID не найден. Начните заново.")
+        return
+
+    min_sale = apply_psychological_ending(
+        calc_min_sale(float(row["buy_price"]), target_net=target)
+    )
+    row["min_sale_for_target"] = f"{min_sale:.2f}"
+    write_rows(rows)
+
+    desc = row["game"]  # без ввода описания — просто название игры
+    listing_text = compose_listing(row, nid, target, min_sale, desc)
+
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+    kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
+
+    USER_STATE.pop(message.from_user.id, None)
+    await message.answer(listing_text, reply_markup=kb)
         
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("wipe:"))
 async def cb_wipe(call: types.CallbackQuery):
