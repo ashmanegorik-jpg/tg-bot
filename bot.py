@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 import asyncio
+import random, string
 
 FILE_LOCK = asyncio.Lock()
 # Память простых состояний диалога и последних описаний по игре
@@ -71,7 +72,7 @@ dp = Dispatcher(bot)
 
 # Создаём CSV если его нет
 FIELDNAMES = [
-    "id", "source_text", "game", "account_desc", "buy_price",
+    "id", "alias", "source_text", "game", "account_desc", "buy_price",
     "buy_date", "status", "min_sale_for_target", "notes",
     "sell_price", "sell_date", "net_profit"
 ]
@@ -165,6 +166,13 @@ def next_id(rows):
         return 1
     return max(int(r["id"]) for r in rows) + 1
 
+def generate_unique_alias(existing: set, length: int = 3) -> str:
+    """Возвращает уникальные 3 буквы [a-z], которых нет в existing."""
+    while True:
+        alias = ''.join(random.choice(string.ascii_lowercase) for _ in range(length))
+        if alias not in existing:
+            return alias
+
 def to_decimal(s):
     """Преобразует строку с ',' или '.' в Decimal, убирает пробелы и NBSP."""
     if s is None:
@@ -233,13 +241,15 @@ def set_description_for_game(game: str, desc: str) -> None:
         GAME_DEFAULT_DESC[game] = desc.strip()
 
 def compose_listing(row, nid, target, min_sale, desc: str) -> str:
+    alias = (row.get("alias") or "").lower()
+    prefix = f"{alias} | " if alias else ""
     return (
         f"ID {nid} — {row['game']}\n"
         f"Куплено: {row['buy_price']}$\n"
         f"Целевой чистый профит: {target}$\n"
         f"Мин. цена продажи: {min_sale}$\n\n"
         "Описание для лота:\n"
-        f"{desc}"
+        f"{prefix}{desc.strip()}"
     )
 
 # ---- Парсер уведомления ----
@@ -309,9 +319,12 @@ async def cmd_add_buy(message: types.Message):
     async with FILE_LOCK:
         rows = read_rows()
         nid = next_id(rows)
+        existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+        alias = generate_unique_alias(existing_aliases)
         min_sale = apply_psychological_ending(calc_min_sale(price_f, target_net=1.0))
         new = {
             "id": str(nid),
+            "alias": alias,
             "source_text": f"manual:{game}|{price_f}|{notes}",
             "game": game,
             "account_desc": "",
@@ -323,6 +336,7 @@ async def cmd_add_buy(message: types.Message):
             "sell_price": "",
             "sell_date": "",
             "net_profit": ""
+            
         }
         rows.append(new)
         write_rows(rows)
@@ -338,17 +352,17 @@ async def cmd_list(message: types.Message):
         await message.answer("Нет лотов в наличии.")
         return
 
-    lines = []
+        lines = []
     for r in in_stock:
-        # описание берём из базы шаблонов / памяти; если нет — fallback
-        desc = get_description_for_game(r["game"]) or r["account_desc"] or f'Stirka | "{r["game"]}"'
-        # цена продажи — это сохранённая мин. цена; если пусто, не ломаемся
+        base_desc = get_description_for_game(r["game"]) or r["account_desc"] or f'Stirka | "{r["game"]}"'
+        alias = (r.get("alias") or "").lower()
+        display_desc = f"{alias} | {base_desc}" if alias else base_desc
+
         sale = r["min_sale_for_target"].strip() if r.get("min_sale_for_target") else ""
         if sale:
-            lines.append(f'ID {r["id"]} — {desc} — {sale}$')
+            lines.append(f'ID {r["id"]} — {display_desc} — {sale}$')
         else:
-            # если цена ещё не выбрана, просто покажем без неё
-            lines.append(f'ID {r["id"]} — {desc}')
+            lines.append(f'ID {r["id"]} — {display_desc}')
 
     await message.answer("Лоты в наличии:\n" + "\n".join(lines))
 
@@ -437,14 +451,7 @@ async def wait_custom_profit(message: types.Message):
     GAME_DEFAULT_DESC[row["game"]] = desc
 
     # соберём ответ и кнопки
-    listing_text = (
-        f"ID {nid} — {row['game']}\n"
-        f"Куплено: {row['buy_price']}$\n"
-        f"Целевой чистый профит: {target}$\n"
-        f"Мин. цена продажи: {min_sale}$\n\n"
-        "Описание для лота:\n"
-        f"{desc}"
-    )
+    listing_text = compose_listing(row, nid, target, min_sale, desc)
 
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
@@ -592,9 +599,12 @@ async def handle_text(message: types.Message):
 
     async with FILE_LOCK:
         rows = read_rows()
+        existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+        alias = generate_unique_alias(existing_aliases)
         nid = next_id(rows)
         new = {
             "id": str(nid),
+            "alias": alias,
             "source_text": parsed["source_text"],
             "game": parsed["game"],
             "account_desc": parsed["account_desc"],
@@ -655,14 +665,8 @@ async def cmd_generate_listing(message: types.Message):
     min_sale = apply_psychological_ending(
     calc_min_sale(float(row["buy_price"]), target_net=target_f)
     )
-    txt = (
-        f"ID {nid} — {row['game']}\n"
-        f"Куплено: {row['buy_price']}$\n"
-        f"Целевой чистый профит: {target_f}$\n"
-        f"Мин. цена продажи: {min_sale}$\n\n"
-        "Описание для лота:\n"
-        f'Stirka | "{row["game"]}"'
-    )
+    desc_default = get_description_for_game(row["game"]) or f'Stirka | "{row["game"]}"'
+    txt = compose_listing(row, nid, target_f, min_sale, desc_default)
     await message.answer(txt)
    
 
@@ -759,14 +763,7 @@ async def cb_profit(call: types.CallbackQuery):
         row["min_sale_for_target"] = f"{min_sale:.2f}"
         write_rows(rows)
 
-        listing_text = (
-            f"ID {nid} — {row['game']}\n"
-            f"Куплено: {row['buy_price']}$\n"
-            f"Целевой чистый профит: {target}$\n"
-            f"Мин. цена продажи: {min_sale}$\n\n"
-            "Описание для лота:\n"
-            f"{saved_desc}"
-        )
+        listing_text = compose_listing(row, nid, target, min_sale, saved_desc)
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
         kb.add(
@@ -848,14 +845,7 @@ async def handle_edit_desc(message: types.Message):
     )
     GAME_DEFAULT_DESC[row["game"]] = desc
 
-    listing_text = (
-        f"ID {nid} — {row['game']}\n"
-        f"Куплено: {row['buy_price']}$\n"
-        f"Целевой чистый профит: {target}$\n"
-        f"Мин. цена продажи: {min_sale}$\n\n"
-        "Описание для лота:\n"
-        f"{desc}"
-    )
+    listing_text = compose_listing(row, nid, target, min_sale, desc)
 
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
