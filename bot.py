@@ -880,7 +880,6 @@ async def cmd_stats(message: types.Message):
         f"Продано: {sold_count}\n"
         f"Восстановлено: {restored_count}\n"
         f"Потрачено всего: {total_spent:.2f}$\n"
-        f"Чистая прибыль с продаж: {total_net_sales:.2f}$\n"
         f"Потери (восстановленные): {total_losses:.2f}$\n"
         f"ИТОГ (прибыль - потери): {real_result:.2f}$\n"
     )
