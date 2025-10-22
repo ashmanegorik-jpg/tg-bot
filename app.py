@@ -8,6 +8,7 @@ from aiogram.types import Update, BotCommand
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot import dp, bot, read_rows, write_rows, next_id, generate_unique_alias
 from bot import parse_notification  # ДОБАВИТЬ
+from bot import FILE_LOCK  # для безопасной записи CSV
 
 app = Flask(__name__)
 
@@ -84,7 +85,84 @@ def telegram_webhook():
         traceback.print_exc()
         # Возвращаем 200, чтобы Telegram не ретраил тот же апдейт
         return "OK", 200
+@app.route("/llz_hook", methods=["POST"])
+def llz_hook():
+    # 1) проверяем секрет
+    secret = request.args.get("secret", "")
+    if secret != os.getenv("CRON_SECRET"):
+        return "Forbidden", 403
 
+    # 2) читаем JSON
+    data = request.get_json(force=True, silent=True) or {}
+    game = (data.get("game") or "").strip()
+    account_desc = (data.get("account_desc") or "").strip()
+
+    # price может прийти строкой — приводим аккуратно
+    price_raw = data.get("price")
+    try:
+        price = float(str(price_raw).replace(",", "."))
+    except Exception:
+        price = None
+
+    if not game or price is None:
+        return "Bad payload", 400
+
+    async def _work():
+        # обязательно один раз инициализируем бота/команды
+        await ensure_startup()
+
+        # 3) пишем в CSV новый лот
+        async with FILE_LOCK:
+            rows = read_rows()
+            existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+            alias = generate_unique_alias(existing_aliases)
+            nid = next_id(rows)
+            new = {
+                "id": str(nid),
+                "alias": alias,
+                "source_text": f"llz_hook:{game}|{price:.2f}|{account_desc}",
+                "game": game,
+                "account_desc": account_desc,
+                "buy_price": f"{price:.2f}",
+                "buy_date": datetime.utcnow().isoformat(),
+                "status": "in_stock",
+                "min_sale_for_target": "",
+                "notes": "",
+                "sell_price": "",
+                "sell_date": "",
+                "net_profit": ""
+            }
+            rows.append(new)
+            write_rows(rows)
+
+        # 4) готовим кнопки и текст — как в боте
+        kb = InlineKeyboardMarkup(row_width=4)
+        kb.add(
+            InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
+            InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
+            InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
+        )
+        kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
+        kb.add(
+            InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+            InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+        )
+
+        draft_text = (
+            f"🆕 Новый лот (ID {nid})\n"
+            f"Игра: {game}\n"
+            f"Описание: {account_desc}\n"
+            f"Куплено за: {price:.2f}$\n\n"
+            "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
+        )
+
+        # 5) отправляем тебе в личку (или в чат) — возьми ID из переменной окружения
+        chat_id = int(os.getenv("ADMIN_CHAT_ID"))
+        await bot.send_message(chat_id, draft_text, reply_markup=kb)
+
+    # запускаем асинхронную часть
+    asyncio.run(_work())
+    return "OK", 200
 @app.post("/lolz/notify")
 def lolz_notify():
     """
