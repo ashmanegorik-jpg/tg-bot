@@ -7,7 +7,6 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 from threading import Thread, Event
-from lolz_api import LolzClient, LolzError
 # импортируем готовые объекты и утилиты из бота
 from bot import dp, bot, read_rows, write_rows, next_id, generate_unique_alias, parse_notification, FILE_LOCK
 
