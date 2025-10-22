@@ -42,8 +42,85 @@ async def ensure_startup():
         BotCommand("monthly", "YYYY-MM — статистика за месяц"),
         BotCommand("export", "Экспорт CSV"),
     ])
+    if not POLL_STARTED:
+        asyncio.create_task(poll_lolz())
+        POLL_STARTED = True
     STARTUP_DONE = True
 
+# app.py (после ensure_startup определения)
+from lolz_api import LolzClient, LolzError
+from bot import dp, bot, read_rows, write_rows, next_id, generate_unique_alias, parse_notification  # если нужно
+
+POLL_STARTED = False
+
+async def poll_lolz():
+    client = LolzClient()
+    seen = set()
+    while True:
+        try:
+            data = await client.get_recent_purchases(limit=50)
+            # TODO: разберите структуру data по доке:
+            items = data.get("items") or data.get("data") or []
+            for it in items:
+                pid = str(it.get("id") or it.get("purchase_id"))
+                if not pid or pid in seen:
+                    continue
+                seen.add(pid)
+
+                # Соберите нужные поля: game/title, description, price и т.п.
+                game = (it.get("title") or it.get("game") or "Неизвестная игра").strip()
+                account_desc = it.get("description") or ""
+                buy_price = float(it.get("price") or 0)
+
+                # Создаём черновик лота (ровно как сейчас при парсинге текста)
+                rows = read_rows()
+                alias_set = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+                alias = generate_unique_alias(alias_set)
+                nid = next_id(rows)
+                new = {
+                    "id": str(nid),
+                    "alias": alias,
+                    "source_text": f"lolz_purchase:{pid}",
+                    "game": game,
+                    "account_desc": account_desc,
+                    "buy_price": f"{buy_price:.2f}",
+                    "buy_date": datetime.utcnow().isoformat(),
+                    "status": "in_stock",
+                    "min_sale_for_target": "",
+                    "notes": "",
+                    "sell_price": "",
+                    "sell_date": "",
+                    "net_profit": ""
+                }
+                rows.append(new)
+                write_rows(rows)
+
+                kb = InlineKeyboardMarkup(row_width=4)
+                kb.add(
+                    InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
+                    InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
+                    InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
+                )
+                kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
+                kb.add(
+                    InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+                    InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+                )
+
+                text = (
+                    f"🆕 Новый лот (ID {nid})\n"
+                    f"Игра: {game}\n"
+                    f"Описание: {account_desc}\n"
+                    f"Куплено за: {buy_price:.2f}$\n\n"
+                    "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
+                )
+                # отправим тебе в ЛС — поставь свой user_id или chat_id
+                # await bot.send_message(<YOUR_CHAT_ID>, text, reply_markup=kb)
+
+        except Exception as e:
+            print("poll error:", e)
+
+        await asyncio.sleep(25)
 
 @app.route("/", methods=["GET"])
 def root():
