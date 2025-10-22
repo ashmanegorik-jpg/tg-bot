@@ -6,7 +6,8 @@ from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
-
+from threading import Thread, Event
+from lolz_api import LolzClient, LolzError
 # импортируем готовые объекты и утилиты из бота
 from bot import dp, bot, read_rows, write_rows, next_id, generate_unique_alias, parse_notification, FILE_LOCK
 
@@ -17,9 +18,121 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
 
 # --- Ставит меню команд один раз при первом апдейте ---
 STARTUP_DONE = False
+POLLER_STARTED = False
+STOP_EVENT = Event()
 
+def start_poller_once():
+    global POLLER_STARTED
+    if POLLER_STARTED or os.getenv("DISABLE_LOLZ_POLLER") == "1":
+        return
+    t = Thread(target=_poll_worker, daemon=True)
+    t.start()
+    POLLER_STARTED = True
+
+def _extract_field(d, *keys, default=""):
+    for k in keys:
+        if isinstance(d, dict) and k in d and d[k]:
+            return d[k]
+    return default
+
+def _poll_worker():
+    """
+    Синхронный поток: каждые 25с берём покупки и шлём новые в бота.
+    Дедупликация — по наличию source_text=lolz_purchase:<id> в CSV.
+    """
+    client = LolzClient()
+    while not STOP_EVENT.is_set():
+        try:
+            data = client.get_recent_purchases(limit=50)
+            items = []
+            # поддержим разные форматы ответа: {items:[...]}, {data:[...]}, или сразу список
+            if isinstance(data, dict):
+                items = data.get("items") or data.get("data") or []
+            elif isinstance(data, list):
+                items = data
+            # читаем CSV один раз
+            rows = read_rows()
+            existing_src = {r.get("source_text","") for r in rows}
+
+            for it in items:
+                # Подбираем поля «как есть» из ответа:
+                pid  = str(_extract_field(it, "id", "purchase_id", default="")).strip()
+                if not pid:
+                    continue
+                src_mark = f"lolz_purchase:{pid}"
+                if src_mark in existing_src:
+                    continue  # уже добавляли
+
+                title = _extract_field(it, "title", "game", default="Без названия").strip()
+                desc  = _extract_field(it, "description", "desc", default="").strip()
+                price = _extract_field(it, "price", "amount", "buy_price", default=0)
+
+                try:
+                    price_f = float(str(price).replace(",", "."))
+                except Exception:
+                    price_f = 0.0
+
+                # добавляем строку в CSV
+                rows = read_rows()
+                alias_set = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+                alias = generate_unique_alias(alias_set)
+                nid = next_id(rows)
+                new = {
+                    "id": str(nid),
+                    "alias": alias,
+                    "source_text": src_mark,
+                    "game": title,
+                    "account_desc": desc,
+                    "buy_price": f"{price_f:.2f}",
+                    "buy_date": datetime.utcnow().isoformat(),
+                    "status": "in_stock",
+                    "min_sale_for_target": "",
+                    "notes": "",
+                    "sell_price": "",
+                    "sell_date": "",
+                    "net_profit": ""
+                }
+                rows.append(new)
+                write_rows(rows)
+
+                # отправляем сообщение админу
+                kb = InlineKeyboardMarkup(row_width=4)
+                kb.add(
+                    InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
+                    InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
+                    InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
+                )
+                kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
+                kb.add(
+                    InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+                    InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+                )
+                text = (
+                    f"🆕 Новый лот (ID {nid})\n"
+                    f"Игра: {title}\n"
+                    f"Описание: {desc}\n"
+                    f"Куплено за: {price_f:.2f}$\n\n"
+                    "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
+                )
+
+                async def _send():
+                    await ensure_startup()
+                    if ADMIN_CHAT_ID:
+                        await bot.send_message(ADMIN_CHAT_ID, text, reply_markup=kb)
+
+                try:
+                    asyncio.run(_send())
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(_send())
+                    loop.close()
+
+        except Exception as e:
+            print("poll error:", e)
+
+        STOP_EVENT.wait(25)
 async def ensure_startup():
-    """Выполняется один раз: регистрируем меню команд в Telegram."""
     global STARTUP_DONE
     if STARTUP_DONE:
         return
@@ -38,6 +151,7 @@ async def ensure_startup():
         BotCommand("monthly", "YYYY-MM — статистика за месяц"),
         BotCommand("export", "Экспорт CSV"),
     ])
+    start_poller_once()
     STARTUP_DONE = True
 
 
