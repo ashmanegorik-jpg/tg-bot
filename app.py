@@ -168,3 +168,75 @@ def lolz_notify():
 if __name__ == "__main__":
     # Локальный запуск (на Render всё равно стартует через gunicorn)
     app.run(host="0.0.0.0", port=10000)
+@app.route("/debug/push_buy/<secret>", methods=["POST"])
+def debug_push_buy(secret):
+    import json
+    from flask import request
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    # 1) проверяем секрет
+    if secret != os.getenv("CRON_SECRET"):
+        return "Forbidden", 403
+
+    data = request.get_json(silent=True) or {}
+    game         = data.get("game", "").strip()
+    account_desc = data.get("account_desc", "").strip()
+    buy_price    = data.get("buy_price", None)
+
+    if not game or buy_price is None:
+        return "Bad Request", 400
+
+    # 2) добавляем запись в CSV (функции импортированы из bot.py)
+    rows = read_rows()
+    existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+    alias = generate_unique_alias(existing_aliases)
+    nid = next_id(rows)
+    new = {
+        "id": str(nid),
+        "alias": alias,
+        "source_text": f"debug:{game}|{buy_price}|{account_desc}",
+        "game": game,
+        "account_desc": account_desc,
+        "buy_price": f"{float(buy_price):.2f}",
+        "buy_date": datetime.utcnow().isoformat(),
+        "status": "in_stock",
+        "min_sale_for_target": "",
+        "notes": "",
+        "sell_price": "",
+        "sell_date": "",
+        "net_profit": ""
+    }
+    rows.append(new)
+    write_rows(rows)
+
+    # 3) отправляем такое же сообщение, как при реальном уведомлении
+    kb = InlineKeyboardMarkup(row_width=4)
+    kb.add(
+        InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
+        InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
+        InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
+    )
+    kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+
+    # куда слать уведомление (твой админский чат)
+    admin_chat_id = os.getenv("ADMIN_CHAT_ID")  # должен быть задан в Render
+    text = (
+        f"🆕 Новый лот (ID {nid})\n"
+        f"Игра: {game}\n"
+        f"Описание: {account_desc}\n"
+        f"Куплено за: {float(buy_price):.2f}$\n\n"
+        "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
+    )
+
+    async def _send():
+        from aiogram import Bot, Dispatcher
+        Bot.set_current(bot)
+        Dispatcher.set_current(dp)
+        await bot.send_message(admin_chat_id, text, reply_markup=kb)
+
+    asyncio.run(_send())
+    return "OK", 200
