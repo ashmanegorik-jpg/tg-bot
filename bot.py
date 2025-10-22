@@ -8,8 +8,11 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 import asyncio
 import random, string
+import aiohttp  # HTTP клиент для async
 from lolz_api import LolzClient, LolzError
-
+# строку с lolz_publisher полностью УДАЛИ
+LZT_TOKEN = os.getenv("LZT_TOKEN")
+API_BASE = "https://api.zelenka.guru"  # проверьте в доках реальную базу
 FILE_LOCK = asyncio.Lock()
 # Память простых состояний диалога и последних описаний по игре
 USER_STATE = {}          # user_id -> {...}
@@ -20,8 +23,6 @@ API_TOKEN = os.getenv("BOT_TOKEN")
 if not API_TOKEN:
     raise RuntimeError("Environment variable BOT_TOKEN is not set")
 
-bot = Bot(token=API_TOKEN)  # без parse_mode
-dp = Dispatcher(bot)
 
 
 # ====== HELP-текст и меню команд ======
@@ -707,12 +708,17 @@ async def cb_posted(call: types.CallbackQuery):
         await call.answer()
         return
 
-    # если нужны доп.поля для конкретной категории — заполни в extra
-    extra = {}  # например: {"category_id": 123, "currency": "USD"}
+    # сюда при необходимости добавишь поля категории/валюты/итп по требованиям API
+    extra = {}  # пример: {"category_id": 123, "currency": "USD"}
 
     try:
-        client = LolzClient()
-        listing_id = await client.publish_listing(title=title, description=desc, price=price, extra=extra)
+        client = LolzClient()  # читает ключ из переменных окружения
+        listing_id = await client.publish_listing(
+            title=title,
+            description=desc,
+            price=price,
+            extra=extra
+        )
     except LolzError as e:
         await call.message.answer(f"Ошибка публикации на Lolz: {e}")
         await call.answer()
@@ -722,14 +728,16 @@ async def cb_posted(call: types.CallbackQuery):
         await call.answer()
         return
 
-    # сохраняем статус и id объявления (положим в notes, чтобы не менять схему)
+    # помечаем как опубликованный и сохраняем ID объявления в notes
     async with FILE_LOCK:
         notes = (row.get("notes") or "").strip()
         row["status"] = "listed"
         row["notes"] = (notes + f" | lolz_id={listing_id}").strip(" |")
         write_rows(rows)
 
-    await call.message.answer(f"✅ Опубликовано на Lolz: ID {listing_id}\nЛот {nid} помечен как опубликованный.")
+    await call.message.answer(
+        f"✅ Опубликовано на Lolz: ID {listing_id}\nЛот {nid} помечен как опубликованный."
+    )
     await call.answer()
 
     
@@ -1022,7 +1030,6 @@ async def create_lot_and_prompt(parsed: dict, chat_id: int):
         "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
     )
     await bot.send_message(chat_id, draft_text, reply_markup=kb)
-
 
 
 
