@@ -405,7 +405,77 @@ def lolz_email():
     asyncio.run(_send())
     return "OK", 200
 
+@app.get("/debug/push_buy_get")
+def debug_push_buy_get():
+    # 1) защита секретом
+    secret = request.args.get("secret", "")
+    if secret != os.getenv("CRON_SECRET"):
+        return "Forbidden", 403
 
+    # 2) берем параметры из query
+    game = (request.args.get("game") or "").strip()
+    account_desc = (request.args.get("account_desc") or request.args.get("desc") or "").strip()
+    price_raw = request.args.get("price") or request.args.get("buy_price")
+
+    try:
+        price_f = float(str(price_raw).replace(",", "."))
+    except Exception:
+        return "Bad Request", 400
+    if not game:
+        return "Bad Request", 400
+
+    # 3) создаём запись в CSV (как в /debug/push_buy)
+    rows = read_rows()
+    existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+    alias = generate_unique_alias(existing_aliases)
+    nid = next_id(rows)
+    new = {
+        "id": str(nid),
+        "alias": alias,
+        "source_text": f"debug_get:{game}|{price_f}|{account_desc}",
+        "game": game,
+        "account_desc": account_desc,
+        "buy_price": f"{price_f:.2f}",
+        "buy_date": datetime.utcnow().isoformat(),
+        "status": "in_stock",
+        "min_sale_for_target": "",
+        "notes": "",
+        "sell_price": "",
+        "sell_date": "",
+        "net_profit": ""
+    }
+    rows.append(new)
+    write_rows(rows)
+
+    # 4) отправляем сообщение в ТГ (как обычно)
+    kb = InlineKeyboardMarkup(row_width=4)
+    kb.add(
+        InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
+        InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
+        InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
+    )
+    kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+
+    text = (
+        f"🆕 Новый лот (ID {nid})\n"
+        f"Игра: {game}\n"
+        f"Описание: {account_desc}\n"
+        f"Куплено за: {price_f:.2f}$\n\n"
+        "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
+    )
+
+    async def _send():
+        await ensure_startup()
+        admin_id = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
+        if admin_id:
+            await bot.send_message(admin_id, text, reply_markup=kb)
+    asyncio.run(_send())
+
+    return "OK", 200
 # ===== Тестовый эндпойнт для ручной проверки =====
 @app.route("/debug/push_buy/<secret>", methods=["POST"])
 def debug_push_buy(secret):
