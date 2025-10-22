@@ -979,6 +979,57 @@ async def cmd_export(message: types.Message):
 
 # ВАЖНО: никаких executor.start_polling здесь нет!
 # dp и bot импортирует app.py (Flask) и гоняет webhook.
+# === helper: создать лот и отправить сообщение "Новый лот" с кнопками ===
+async def create_lot_and_prompt(parsed: dict, chat_id: int):
+    """
+    parsed = {"game": str, "account_desc": str, "buy_price": float, "source_text": str}
+    chat_id = куда отправлять сообщение
+    """
+    async with FILE_LOCK:
+        rows = read_rows()
+        existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+        alias = generate_unique_alias(existing_aliases)
+        nid = next_id(rows)
+        new = {
+            "id": str(nid),
+            "alias": alias,
+            "source_text": parsed.get("source_text", ""),
+            "game": parsed.get("game", ""),
+            "account_desc": parsed.get("account_desc", ""),
+            "buy_price": f"{float(parsed['buy_price']):.2f}",
+            "buy_date": datetime.utcnow().isoformat(),
+            "status": "in_stock",
+            "min_sale_for_target": "",
+            "notes": "",
+            "sell_price": "",
+            "sell_date": "",
+            "net_profit": ""
+        }
+        rows.append(new)
+        write_rows(rows)
+
+    kb = InlineKeyboardMarkup(row_width=4)
+    kb.add(
+        InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
+        InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
+        InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
+    )
+    kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+
+    draft_text = (
+        f"🆕 Новый лот (ID {nid})\n"
+        f"Игра: {parsed.get('game','')}\n"
+        f"Описание: {parsed.get('account_desc','')}\n"
+        f"Куплено за: {float(parsed['buy_price']):.2f}$\n\n"
+        "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
+    )
+    await bot.send_message(chat_id, draft_text, reply_markup=kb)
+
+
 
 
 
