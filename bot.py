@@ -676,11 +676,13 @@ async def cb_posted(call: types.CallbackQuery):
             await call.answer("Лот не найден.", show_alert=True)
             return
 
-        # Просто помечаем как опубликованный — НИКУДА ничего не отправляем
         row["status"] = "listed"
+        notes = (row.get("notes") or "").strip()
+        if "lolz_id=" not in notes:
+            row["notes"] = notes  # оставляем как есть; храним только локальный статус
         write_rows(rows)
 
-    await call.message.answer(f"Лот {nid} помечен как опубликованный.")
+    await call.message.answer(f"✅ Лот {nid} помечен как опубликованный (локально).")
     await call.answer()
 
     
