@@ -3,16 +3,15 @@ import os
 import asyncio
 from flask import Flask, request, jsonify
 from datetime import datetime
+
 from aiogram import Bot, Dispatcher
-from aiogram.types import Update, BotCommand
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from bot import dp, bot, read_rows, write_rows, next_id, generate_unique_alias
-from bot import parse_notification  # ДОБАВИТЬ
-from bot import FILE_LOCK  # для безопасной записи CSV
+from aiogram.types import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
+
+# импортируем готовые объекты и утилиты из бота
+from bot import dp, bot, read_rows, write_rows, next_id, generate_unique_alias, parse_notification, FILE_LOCK
 
 app = Flask(__name__)
 
-# Токен читаем из переменных окружения Render
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
 
@@ -20,14 +19,11 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
 STARTUP_DONE = False
 
 async def ensure_startup():
-    """
-    Выполняется один раз: регистрируем меню команд в Telegram.
-    """
+    """Выполняется один раз: регистрируем меню команд в Telegram."""
     global STARTUP_DONE
     if STARTUP_DONE:
         return
 
-    # Кладём bot/dp в текущий контекст aiogram
     Bot.set_current(bot)
     Dispatcher.set_current(dp)
 
@@ -42,85 +38,8 @@ async def ensure_startup():
         BotCommand("monthly", "YYYY-MM — статистика за месяц"),
         BotCommand("export", "Экспорт CSV"),
     ])
-    if not POLL_STARTED:
-        asyncio.create_task(poll_lolz())
-        POLL_STARTED = True
     STARTUP_DONE = True
 
-# app.py (после ensure_startup определения)
-from lolz_api import LolzClient, LolzError
-from bot import dp, bot, read_rows, write_rows, next_id, generate_unique_alias, parse_notification  # если нужно
-
-POLL_STARTED = False
-
-async def poll_lolz():
-    client = LolzClient()
-    seen = set()
-    while True:
-        try:
-            data = await client.get_recent_purchases(limit=50)
-            # TODO: разберите структуру data по доке:
-            items = data.get("items") or data.get("data") or []
-            for it in items:
-                pid = str(it.get("id") or it.get("purchase_id"))
-                if not pid or pid in seen:
-                    continue
-                seen.add(pid)
-
-                # Соберите нужные поля: game/title, description, price и т.п.
-                game = (it.get("title") or it.get("game") or "Неизвестная игра").strip()
-                account_desc = it.get("description") or ""
-                buy_price = float(it.get("price") or 0)
-
-                # Создаём черновик лота (ровно как сейчас при парсинге текста)
-                rows = read_rows()
-                alias_set = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
-                alias = generate_unique_alias(alias_set)
-                nid = next_id(rows)
-                new = {
-                    "id": str(nid),
-                    "alias": alias,
-                    "source_text": f"lolz_purchase:{pid}",
-                    "game": game,
-                    "account_desc": account_desc,
-                    "buy_price": f"{buy_price:.2f}",
-                    "buy_date": datetime.utcnow().isoformat(),
-                    "status": "in_stock",
-                    "min_sale_for_target": "",
-                    "notes": "",
-                    "sell_price": "",
-                    "sell_date": "",
-                    "net_profit": ""
-                }
-                rows.append(new)
-                write_rows(rows)
-
-                kb = InlineKeyboardMarkup(row_width=4)
-                kb.add(
-                    InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
-                    InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
-                    InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
-                )
-                kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
-                kb.add(
-                    InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-                    InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-                )
-
-                text = (
-                    f"🆕 Новый лот (ID {nid})\n"
-                    f"Игра: {game}\n"
-                    f"Описание: {account_desc}\n"
-                    f"Куплено за: {buy_price:.2f}$\n\n"
-                    "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
-                )
-                # отправим тебе в ЛС — поставь свой user_id или chat_id
-                # await bot.send_message(<YOUR_CHAT_ID>, text, reply_markup=kb)
-
-        except Exception as e:
-            print("poll error:", e)
-
-        await asyncio.sleep(25)
 
 @app.route("/", methods=["GET"])
 def root():
@@ -136,21 +55,17 @@ def telegram_webhook():
         data = request.get_json(force=True, silent=True) or {}
         print(">>> incoming update:", data)
 
-        # Пропускаем апдейты без message/callback_query
+        # игнорим неинтересные апдейты
         if "message" not in data and "callback_query" not in data:
             return "IGNORED", 200
 
-        # Словарь -> объект Update
         update = Update.to_object(data)
 
-        # Важно: положить bot/dp в текущий контекст aiogram
         Bot.set_current(bot)
         Dispatcher.set_current(dp)
 
         async def _handle():
-            # Меню команд ставим один раз
             await ensure_startup()
-            # Обрабатываем апдейт
             await dp.process_update(update)
 
         asyncio.run(_handle())
@@ -160,21 +75,22 @@ def telegram_webhook():
         import traceback
         print(">>> ERROR in webhook:", e)
         traceback.print_exc()
-        # Возвращаем 200, чтобы Telegram не ретраил тот же апдейт
+        # всегда 200, чтобы TG не ретраил
         return "OK", 200
+
+
+# ===== ТВОЙ «мост» для ручных уведомлений (использовал в тестовом скрипте) =====
 @app.route("/llz_hook", methods=["POST"])
 def llz_hook():
-    # 1) проверяем секрет
+    # защита по секрету в query
     secret = request.args.get("secret", "")
     if secret != os.getenv("CRON_SECRET"):
         return "Forbidden", 403
 
-    # 2) читаем JSON
     data = request.get_json(force=True, silent=True) or {}
     game = (data.get("game") or "").strip()
     account_desc = (data.get("account_desc") or "").strip()
 
-    # price может прийти строкой — приводим аккуратно
     price_raw = data.get("price")
     try:
         price = float(str(price_raw).replace(",", "."))
@@ -185,7 +101,6 @@ def llz_hook():
         return "Bad payload", 400
 
     async def _work():
-        # обязательно один раз инициализируем бота/команды
         await ensure_startup()
 
         # 3) пишем в CSV новый лот
@@ -212,7 +127,7 @@ def llz_hook():
             rows.append(new)
             write_rows(rows)
 
-        # 4) готовим кнопки и текст — как в боте
+        # 4) кнопки и сообщение
         kb = InlineKeyboardMarkup(row_width=4)
         kb.add(
             InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
@@ -233,24 +148,16 @@ def llz_hook():
             "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
         )
 
-        # 5) отправляем тебе в личку (или в чат) — возьми ID из переменной окружения
-        chat_id = int(os.getenv("ADMIN_CHAT_ID"))
-        await bot.send_message(chat_id, draft_text, reply_markup=kb)
+        if ADMIN_CHAT_ID:
+            await bot.send_message(ADMIN_CHAT_ID, draft_text, reply_markup=kb)
 
-    # запускаем асинхронную часть
     asyncio.run(_work())
     return "OK", 200
+
+
+# ===== Вебхук, если сможешь настроить нативно на Lolz/своём промежуточном сервисе =====
 @app.post("/lolz/notify")
 def lolz_notify():
-    """
-    Ждём JSON от Lolz (или твоего посредника) вида:
-    {
-      "game": "кс",
-      "description": "CS2 Prime | Garrys Mod",
-      "price": 7.29
-    }
-    Ключи можно подстроить: title/amount/buy_price и т.п.
-    """
     data = request.get_json(silent=True) or {}
     game = (data.get("game") or data.get("title") or "").strip()
     account_desc = (data.get("description") or data.get("desc") or "").strip()
@@ -264,7 +171,6 @@ def lolz_notify():
     except Exception:
         return jsonify({"ok": False, "error": "bad price"}), 400
 
-    # Создаём новый лот в CSV (как будто пришло обычное уведомление)
     rows = read_rows()
     existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
     alias = generate_unique_alias(existing_aliases)
@@ -288,7 +194,6 @@ def lolz_notify():
     rows.append(new)
     write_rows(rows)
 
-    # Клавиатура точно как в боте
     kb = InlineKeyboardMarkup(row_width=4)
     kb.add(
         InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
@@ -309,41 +214,32 @@ def lolz_notify():
         "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
     )
 
-    # Шлём сообщение админу
-    if ADMIN_CHAT_ID:
-        async def _send():
+    async def _send():
+        await ensure_startup()
+        if ADMIN_CHAT_ID:
             await bot.send_message(ADMIN_CHAT_ID, draft_text, reply_markup=kb)
-        try:
-            asyncio.run(_send())
-        except RuntimeError:
-            # на случай, если цикл уже запущен
-            loop = asyncio.get_event_loop()
-            loop.create_task(_send())
 
+    asyncio.run(_send())
     return jsonify({"ok": True, "id": nid})
-# ===== Роут для приёма уведомлений от «моста» (email/webhook/скрипт) =====
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))  # твой телеграм ID
-CRON_SECRET = os.getenv("CRON_SECRET", "")            # секрет для защиты
 
+
+# ===== Приём «сырого текста» (например, из email-парсера) =====
 @app.route("/lolz/email", methods=["POST"])
 def lolz_email():
-    # 1) простая защита по секрету в заголовке
     sec = request.headers.get("X-Secret")
-    if not CRON_SECRET or sec != CRON_SECRET:
+    cron_secret = os.getenv("CRON_SECRET", "")
+    if not cron_secret or sec != cron_secret:
         return "forbidden", 403
 
-    # 2) берём текст письма/уведомления из JSON {"text": "..."}
     body = request.get_json(force=True, silent=True) or {}
     text = (body.get("text") or "").strip()
     if not text:
         return "bad request", 400
 
-    # 3) парсим текст тем же парсером, что и пересланные уведомления
     parsed = parse_notification(text)
     if not parsed.get("buy_price"):
-        return "IGNORED", 200  # пришло не то письмо
+        return "IGNORED", 200
 
-    # 4) пишем в CSV и собираем клавиатуру как обычно
     rows = read_rows()
     existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
     alias = generate_unique_alias(existing_aliases)
@@ -388,34 +284,30 @@ def lolz_email():
     )
 
     async def _send():
-        Bot.set_current(bot)
-        Dispatcher.set_current(dp)
-        await bot.send_message(ADMIN_CHAT_ID, msg, reply_markup=kb)
+        await ensure_startup()
+        if ADMIN_CHAT_ID:
+            await bot.send_message(ADMIN_CHAT_ID, msg, reply_markup=kb)
 
     asyncio.run(_send())
     return "OK", 200
-if __name__ == "__main__":
-    # Локальный запуск (на Render всё равно стартует через gunicorn)
-    app.run(host="0.0.0.0", port=10000)
+
+
+# ===== Тестовый эндпойнт для ручной проверки =====
 @app.route("/debug/push_buy/<secret>", methods=["POST"])
 def debug_push_buy(secret):
-    import json
-    from flask import request
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-    # 1) проверяем секрет
     if secret != os.getenv("CRON_SECRET"):
         return "Forbidden", 403
 
     data = request.get_json(silent=True) or {}
-    game         = data.get("game", "").strip()
-    account_desc = data.get("account_desc", "").strip()
-    buy_price    = data.get("buy_price", None)
+    game         = (data.get("game") or "").strip()
+    account_desc = (data.get("account_desc") or "").strip()
+    buy_price    = data.get("buy_price")
 
-    if not game or buy_price is None:
+    try:
+        price_f = float(str(buy_price).replace(",", "."))
+    except Exception:
         return "Bad Request", 400
 
-    # 2) добавляем запись в CSV (функции импортированы из bot.py)
     rows = read_rows()
     existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
     alias = generate_unique_alias(existing_aliases)
@@ -423,10 +315,10 @@ def debug_push_buy(secret):
     new = {
         "id": str(nid),
         "alias": alias,
-        "source_text": f"debug:{game}|{buy_price}|{account_desc}",
+        "source_text": f"debug:{game}|{price_f}|{account_desc}",
         "game": game,
         "account_desc": account_desc,
-        "buy_price": f"{float(buy_price):.2f}",
+        "buy_price": f"{price_f:.2f}",
         "buy_date": datetime.utcnow().isoformat(),
         "status": "in_stock",
         "min_sale_for_target": "",
@@ -438,7 +330,6 @@ def debug_push_buy(secret):
     rows.append(new)
     write_rows(rows)
 
-    # 3) отправляем такое же сообщение, как при реальном уведомлении
     kb = InlineKeyboardMarkup(row_width=4)
     kb.add(
         InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
@@ -451,21 +342,23 @@ def debug_push_buy(secret):
         InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
     )
 
-    # куда слать уведомление (твой админский чат)
-    admin_chat_id = os.getenv("ADMIN_CHAT_ID")  # должен быть задан в Render
     text = (
         f"🆕 Новый лот (ID {nid})\n"
         f"Игра: {game}\n"
         f"Описание: {account_desc}\n"
-        f"Куплено за: {float(buy_price):.2f}$\n\n"
+        f"Куплено за: {price_f:.2f}$\n\n"
         "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
     )
 
     async def _send():
-        from aiogram import Bot, Dispatcher
-        Bot.set_current(bot)
-        Dispatcher.set_current(dp)
-        await bot.send_message(admin_chat_id, text, reply_markup=kb)
+        await ensure_startup()
+        if ADMIN_CHAT_ID:
+            await bot.send_message(ADMIN_CHAT_ID, text, reply_markup=kb)
 
     asyncio.run(_send())
     return "OK", 200
+
+
+if __name__ == "__main__":
+    # Локальный запуск (на Render — gunicorn)
+    app.run(host="0.0.0.0", port=10000)
