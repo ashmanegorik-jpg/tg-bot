@@ -703,7 +703,12 @@ async def cb_posted(call: types.CallbackQuery):
         return
 
     # сюда при необходимости добавишь поля категории/валюты/итп по требованиям API
-    extra = {}  # пример: {"category_id": 123, "currency": "USD"}
+    extra = {
+    "category_id": int(os.getenv("LZT_CATEGORY_ID", "0")),  # Поставь нужный ID
+    "currency": os.getenv("LZT_CURRENCY", "USD"),           # если требуется
+    # Добавь и другие обязательные ключи из доков именно для твоей категории,
+    # например логин/почта/тип аккаунта и т.п.
+}  # пример: {"category_id": 123, "currency": "USD"}
 
     try:
         client = LolzClient()  # читает ключ из переменных окружения
