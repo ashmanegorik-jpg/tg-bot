@@ -7,10 +7,6 @@ import asyncio
 import random, string
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
-from lolz_api import LolzClient, LolzError  # наш клиент для публикации
-# строку с lolz_publisher полностью УДАЛИ
-LZT_TOKEN = os.getenv("LZT_TOKEN")
-API_BASE = "https://api.zelenka.guru"  # проверьте в доках реальную базу
 FILE_LOCK = asyncio.Lock()
 # Память простых состояний диалога и последних описаний по игре
 USER_STATE = {}          # user_id -> {...}
@@ -62,7 +58,6 @@ DATA_CSV = os.path.join(os.path.dirname(__file__), "inventory.csv")
 DESC_CSV = os.path.join(os.path.dirname(__file__), "descriptions.csv")
 COMMISSION = 0.06           # 6%
 PRICE_ENDING = "tenth_9"    # психологическое окончание
-FILE_LOCK = asyncio.Lock()
 # ==============================
 
 if not API_TOKEN:
@@ -129,15 +124,6 @@ def save_description_for_game(game: str, description: str):
         writer.writeheader()
         writer.writerows(rows)
 
-def compose_listing(row, nid, target, min_sale, description: str) -> str:
-    return (
-        f"ID {nid} — {row['game']}\n"
-        f"Куплено: {row['buy_price']}$\n"
-        f"Целевой чистый профит: {target}$\n"
-        f"Мин. цена продажи: {min_sale}$\n\n"
-        "Описание для лота:\n"
-        f"{description.strip()}"
-    )
 if not os.path.exists(DATA_CSV):
     with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
@@ -683,60 +669,18 @@ async def cb_profit(call: types.CallbackQuery):
 async def cb_posted(call: types.CallbackQuery):
     _, nid = call.data.split(":", 1)
 
-    rows = read_rows()
-    row = next((r for r in rows if r["id"] == str(nid)), None)
-    if not row:
-        await call.answer("Лот не найден.", show_alert=True)
-        return
-
-    title = row["game"]
-    desc  = GAME_DEFAULT_DESC.get(row["game"]) or row["game"]
-
-    try:
-        price = float(row.get("min_sale_for_target") or 0)
-    except:
-        price = 0.0
-
-    if price <= 0:
-        await call.message.answer("Сначала выбери профит, чтобы посчитать цену.")
-        await call.answer()
-        return
-
-    # сюда при необходимости добавишь поля категории/валюты/итп по требованиям API
-    extra = {
-    "category_id": int(os.getenv("LZT_CATEGORY_ID", "0")),  # Поставь нужный ID
-    "currency": os.getenv("LZT_CURRENCY", "USD"),           # если требуется
-    # Добавь и другие обязательные ключи из доков именно для твоей категории,
-    # например логин/почта/тип аккаунта и т.п.
-}  # пример: {"category_id": 123, "currency": "USD"}
-
-    try:
-        client = LolzClient()  # читает ключ из переменных окружения
-        listing_id = await client.publish_listing(
-            title=title,
-            description=desc,
-            price=price,
-            extra=extra
-        )
-    except LolzError as e:
-        await call.message.answer(f"Ошибка публикации на Lolz: {e}")
-        await call.answer()
-        return
-    except Exception as e:
-        await call.message.answer(f"Неожиданная ошибка: {e}")
-        await call.answer()
-        return
-
-    # помечаем как опубликованный и сохраняем ID объявления в notes
     async with FILE_LOCK:
-        notes = (row.get("notes") or "").strip()
+        rows = read_rows()
+        row = next((r for r in rows if r["id"] == str(nid)), None)
+        if not row:
+            await call.answer("Лот не найден.", show_alert=True)
+            return
+
+        # Просто помечаем как опубликованный — НИКУДА ничего не отправляем
         row["status"] = "listed"
-        row["notes"] = (notes + f" | lolz_id={listing_id}").strip(" |")
         write_rows(rows)
 
-    await call.message.answer(
-        f"✅ Опубликовано на Lolz: ID {listing_id}\nЛот {nid} помечен как опубликованный."
-    )
+    await call.message.answer(f"Лот {nid} помечен как опубликованный.")
     await call.answer()
 
     
