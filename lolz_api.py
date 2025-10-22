@@ -1,72 +1,62 @@
 # lolz_api.py
 import os
-import aiohttp
-from typing import Any, Dict, Optional
+import json
+import urllib.request
+import urllib.error
+import asyncio
 
-LZT_TOKEN = os.getenv("LZT_TOKEN")
-# === ПОДТВЕРДИ по докам базовый URL ===
-BASE = "https://api.zelenka.guru"  # TODO: если другой, поменяй
-
-class LolzError(RuntimeError):
+class LolzError(Exception):
     pass
 
 class LolzClient:
-    def __init__(self, token: Optional[str] = None):
-        self.token = token or LZT_TOKEN
-        if not self.token:
-            raise LolzError("LZT_TOKEN не задан в переменных окружения")
-        self._headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+    def __init__(self):
+        self.api_key = os.getenv("LOLZ_API_KEY")  # задай в Render → Environment
+        if not self.api_key:
+            raise LolzError("Переменная окружения LOLZ_API_KEY не задана.")
+        self.base = "https://api.zelenka.guru"    # пример базового домена API
 
-    async def _request(self, method: str, url: str, **kw) -> Dict[str, Any]:
-        async with aiohttp.ClientSession(headers=self._headers) as s:
-            async with s.request(method, url, **kw) as r:
-                # некоторые API шлют text при ошибке
-                ct = r.headers.get("content-type", "")
-                if "application/json" in ct:
-                    data = await r.json()
-                else:
-                    data = {"raw": await r.text()}
-                if r.status >= 300:
-                    raise LolzError(f"{r.status} {data}")
-                return data
-
-    # ========= ПУБЛИКАЦИЯ ЛОТА =========
-    async def publish_listing(self, *, title: str, description: str, price: float,
-                              extra: Optional[Dict[str, Any]] = None) -> str:
+    async def publish_listing(self, title: str, description: str, price: float, extra: dict | None = None) -> int:
         """
-        Возвращает ID/ссылку объявления.
-        TODO: замени путь и поля payload на реальные из доки.
+        Пример-обёртка. Здесь нужно поставить точный endpoint и поля под твою категорию.
+        Сейчас показан шаблон, чтобы связка в боте работала.
         """
         payload = {
             "title": title,
             "description": description,
             "price": price,
-            # возможно потребуются:
-            # "category_id": 123,
-            # "currency": "USD",
-            # "game_id": ...,
-            # "account": {...}
         }
         if extra:
             payload.update(extra)
 
-        url = f"{BASE}/market/items"   # TODO: поправь путь из доки
-        data = await self._request("POST", url, json=payload)
+        # ВНИМАНИЕ: замени URL на реальный endpoint из документации Lolz (Market API).
+        url = f"{self.base}/market/your-endpoint-here"
 
-        # верни реальный ключ из ответа (посмотри в доке/примере)
-        return str(
-            data.get("id") or data.get("item_id") or data.get("data", {}).get("id") or data
-        )
+        def _do_request():
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    body = resp.read().decode("utf-8")
+                    if resp.status >= 400:
+                        raise LolzError(f"HTTP {resp.status}: {body}")
+                    j = json.loads(body or "{}")
+                    # ВЫТАЩИ ИЗ j реальный ID объявления по схеме их ответа:
+                    listing_id = j.get("id") or j.get("data", {}).get("id")
+                    if not listing_id:
+                        raise LolzError(f"Не удалось получить ID объявления из ответа: {j}")
+                    return int(listing_id)
+            except urllib.error.HTTPError as e:
+                raise LolzError(f"HTTPError {e.code}: {e.read().decode('utf-8', 'ignore')}")
+            except urllib.error.URLError as e:
+                raise LolzError(f"URLError: {e.reason}")
 
-    # ========= ПОЛУЧЕНИЕ ПОКУПОК (для polling) =========
-    async def get_recent_purchases(self, *, limit: int = 50) -> Dict[str, Any]:
-        """
-        Вернёт сырой ответ. Ты из него возьмёшь нужные поля.
-        TODO: замени путь/параметры на реальные.
-        """
-        url = f"{BASE}/market/purchases?limit={limit}"  # TODO: поправь
-        return await self._request("GET", url)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _do_request)
