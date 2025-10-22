@@ -3,13 +3,11 @@ import csv
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 import asyncio
 import random, string
-import aiohttp  # HTTP клиент для async
-from lolz_api import LolzClient, LolzError
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
+from lolz_api import LolzClient, LolzError  # наш клиент для публикации
 # строку с lolz_publisher полностью УДАЛИ
 LZT_TOKEN = os.getenv("LZT_TOKEN")
 API_BASE = "https://api.zelenka.guru"  # проверьте в доках реальную базу
@@ -60,10 +58,11 @@ async def set_bot_commands():
 
 
 # ========== НАСТРОЙКИ ==========
-API_TOKEN = os.getenv("BOT_TOKEN")  # ВАЖНО: читаем BOT_TOKEN (как в Render)
 DATA_CSV = os.path.join(os.path.dirname(__file__), "inventory.csv")
-COMMISSION = 0.06  # 6% (3% продажа + 3% вывод)
-PRICE_ENDING = "tenth_9"  # округление к следующей десятичной, затем -0.01
+DESC_CSV = os.path.join(os.path.dirname(__file__), "descriptions.csv")
+COMMISSION = 0.06           # 6%
+PRICE_ENDING = "tenth_9"    # психологическое окончание
+FILE_LOCK = asyncio.Lock()
 # ==============================
 
 if not API_TOKEN:
@@ -197,14 +196,13 @@ def calc_net_from_sale(sale_price, buy_price):
     received = sale * (Decimal("1") - Decimal(str(COMMISSION)))
     net = received - buy
     return float(net.quantize(Decimal("0.01")))
-from decimal import Decimal
 
 def apply_psychological_ending(amount, ending=PRICE_ENDING):
     """
     Режимы:
-      ending == "tenth_9": всегда округлить ВВЕРХ к следующей 0.1, затем -0.01
+      ending == "tenth_9": округлить вверх к следующей 0.1, затем -0.01
         3.66 -> 3.69, 6.30 -> 6.39, 2.00 -> 2.09, 3.69 -> 3.69
-      ending in (".99", ".49"): как раньше — к ближайшему следующему X.99 или X.49
+      ending in (".99", ".49"): округлить вверх к ближайшему X.99 или X.49
     """
     try:
         d = Decimal(str(amount)).quantize(Decimal("0.01"))
@@ -212,21 +210,19 @@ def apply_psychological_ending(amount, ending=PRICE_ENDING):
         return float(amount)
 
     if ending == "tenth_9":
-        # работаем в центах, чтобы не ловить двоичную арифметику
-        cents = int(d * 100)                              # 3.66 -> 366
-        next_tenth_cents = ((cents + 9) // 10) * 10       # ceil до множителя 10 центов: 366 -> 370
-        candidate_cents = next_tenth_cents - 1            # 370 - 1 = 369 -> 3.69
+        cents = int(d * 100)                       # 3.66 -> 366
+        next_tenth_cents = ((cents + 9) // 10) * 10
+        candidate_cents = next_tenth_cents - 1     # 370 -> 369 => 3.69
         return float(Decimal(candidate_cents) / Decimal(100))
 
     if ending in (".99", ".49"):
         end = Decimal(ending)
-        int_part = int(d)                                 # целая часть вниз
-        candidate = Decimal(int_part) + end               # 6.38 -> 6.99 / 6.49
+        int_part = int(d)
+        candidate = Decimal(int_part) + end
         if candidate < d:
             candidate = Decimal(int_part + 1) + end
         return float(candidate.quantize(Decimal("0.01")))
 
-    # по умолчанию — ничего не делаем
     return float(d)
 
     end = Decimal(ending)
@@ -235,8 +231,6 @@ def apply_psychological_ending(amount, ending=PRICE_ENDING):
     if candidate < d:
         candidate = Decimal(int_part + 1) + end
     return float(candidate.quantize(Decimal("0.01")))
-def get_description_for_game(game: str) -> str:
-    return GAME_DEFAULT_DESC.get(game)
 
 def set_description_for_game(game: str, desc: str) -> None:
     if desc:
