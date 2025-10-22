@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import Update, BotCommand
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot import dp, bot, read_rows, write_rows, next_id, generate_unique_alias
+from bot import parse_notification  # ДОБАВИТЬ
 
 app = Flask(__name__)
 
@@ -165,6 +166,79 @@ def lolz_notify():
             loop.create_task(_send())
 
     return jsonify({"ok": True, "id": nid})
+# ===== Роут для приёма уведомлений от «моста» (email/webhook/скрипт) =====
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))  # твой телеграм ID
+CRON_SECRET = os.getenv("CRON_SECRET", "")            # секрет для защиты
+
+@app.route("/lolz/email", methods=["POST"])
+def lolz_email():
+    # 1) простая защита по секрету в заголовке
+    sec = request.headers.get("X-Secret")
+    if not CRON_SECRET or sec != CRON_SECRET:
+        return "forbidden", 403
+
+    # 2) берём текст письма/уведомления из JSON {"text": "..."}
+    body = request.get_json(force=True, silent=True) or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return "bad request", 400
+
+    # 3) парсим текст тем же парсером, что и пересланные уведомления
+    parsed = parse_notification(text)
+    if not parsed.get("buy_price"):
+        return "IGNORED", 200  # пришло не то письмо
+
+    # 4) пишем в CSV и собираем клавиатуру как обычно
+    rows = read_rows()
+    existing_aliases = {(r.get("alias") or "").lower() for r in rows if r.get("alias")}
+    alias = generate_unique_alias(existing_aliases)
+    nid = next_id(rows)
+
+    new = {
+        "id": str(nid),
+        "alias": alias,
+        "source_text": parsed["source_text"],
+        "game": parsed["game"],
+        "account_desc": parsed["account_desc"],
+        "buy_price": f"{float(parsed['buy_price']):.2f}",
+        "buy_date": datetime.utcnow().isoformat(),
+        "status": "in_stock",
+        "min_sale_for_target": "",
+        "notes": "",
+        "sell_price": "",
+        "sell_date": "",
+        "net_profit": ""
+    }
+    rows.append(new)
+    write_rows(rows)
+
+    kb = InlineKeyboardMarkup(row_width=4)
+    kb.add(
+        InlineKeyboardButton("Профит $0.5", callback_data=f"profit:{nid}:0.5"),
+        InlineKeyboardButton("Профит $1",   callback_data=f"profit:{nid}:1"),
+        InlineKeyboardButton("Профит $2",   callback_data=f"profit:{nid}:2"),
+    )
+    kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
+    kb.add(
+        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
+        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    )
+
+    msg = (
+        f"🆕 Новый лот (ID {nid})\n"
+        f"Игра: {parsed['game']}\n"
+        f"Описание: {parsed['account_desc']}\n"
+        f"Куплено за: {float(parsed['buy_price']):.2f}$\n\n"
+        "Выбери целевой профит, чтобы получить мин. цену продажи и шаблон."
+    )
+
+    async def _send():
+        Bot.set_current(bot)
+        Dispatcher.set_current(dp)
+        await bot.send_message(ADMIN_CHAT_ID, msg, reply_markup=kb)
+
+    asyncio.run(_send())
+    return "OK", 200
 if __name__ == "__main__":
     # Локальный запуск (на Render всё равно стартует через gunicorn)
     app.run(host="0.0.0.0", port=10000)
