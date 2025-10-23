@@ -21,12 +21,17 @@ def _save_seen(seen: set):
 
 def _session_with_cookies():
     cookies_json = (
-    os.getenv("LZT_COOKIES_JSON")
-    or os.getenv("LOLZ_COOKIES_JSON")
-    or ""
-)
-if not cookies_json:
-    raise RuntimeError("Set LZT_COOKIES_JSON (or LOLZ_COOKIES_JSON) in env")
+        os.getenv("LZT_COOKIES_JSON")
+        or os.getenv("LOLZ_COOKIES_JSON")
+        or ""
+    )
+    if not cookies_json:
+        raise RuntimeError("Set LZT_COOKIES_JSON (or LOLZ_COOKIES_JSON) in env")
+
+    try:
+        cookies = json.loads(cookies_json)
+    except Exception:
+        raise RuntimeError("LZT_COOKIES_JSON must be valid JSON exported from Cookie-Editor")
 
     s = requests.Session()
     s.headers.update({"User-Agent": "Mozilla/5.0"})
