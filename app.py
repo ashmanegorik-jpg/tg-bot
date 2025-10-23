@@ -3,6 +3,8 @@ import os
 import asyncio
 from flask import Flask, request, jsonify
 from datetime import datetime
+from lzt_scraper import poll_new_texts
+from bot import create_lot_and_prompt  # у тебя уже есть
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
