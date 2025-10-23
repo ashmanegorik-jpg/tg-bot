@@ -542,6 +542,26 @@ def debug_push_buy(secret):
 
     asyncio.run(_send())
     return "OK", 200
+@app.get("/poll")
+def poll():
+    # защита по секрету
+    if request.args.get("secret") != os.getenv("CRON_SECRET"):
+        return "forbidden", 403
+
+    try:
+        new_texts = poll_new_texts()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    async def _send():
+        await ensure_startup()
+        for t in new_texts:
+            parsed = parse_notification(t)
+            if parsed.get("buy_price"):
+                await create_lot_and_prompt(parsed, ADMIN_CHAT_ID)
+
+    asyncio.run(_send())
+    return jsonify({"ok": True, "delivered": len(new_texts)})
 
 
 if __name__ == "__main__":
