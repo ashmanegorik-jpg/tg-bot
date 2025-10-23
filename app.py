@@ -19,16 +19,10 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or 0)
 
 # --- Ставит меню команд один раз при первом апдейте ---
 STARTUP_DONE = False
-POLLER_STARTED = False
-STOP_EVENT = Event()
-
+# --- Поллер Lolz отключаем. Используем только ручной /poll ---
 def start_poller_once():
-    global POLLER_STARTED
-    if POLLER_STARTED or os.getenv("DISABLE_LOLZ_POLLER") == "1":
-        return
-    t = Thread(target=_poll_worker, daemon=True)
-    t.start()
-    POLLER_STARTED = True
+    # ничего не запускаем
+    pass
 
 def _extract_field(d, *keys, default=""):
     for k in keys:
