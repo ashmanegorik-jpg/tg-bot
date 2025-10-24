@@ -4,6 +4,13 @@ import requests
 
 ALERTS_URL = os.getenv("LZT_ALERTS_URL", "https://zelenka.guru/account/alerts")
 STATE_PATH = os.path.join(os.path.dirname(__file__), "alerts_state.json")
+UA = os.getenv("LZT_UA", "Mozilla/5.0")
+
+# Ищем текст: По вашей ссылке "GTA 5" куплен аккаунт ... за $5.53
+PATTERN = re.compile(
+    r'По вашей ссылке\s*["“]([^"”]+)["”]\s*куплен аккаунт\s*(.+?)\s*за\s*(?:\$\s*)?([\d\.,]+)',
+    re.I | re.S
+)
 
 def _load_seen():
     try:
@@ -31,15 +38,12 @@ def _session_with_cookies():
     try:
         cookies = json.loads(cookies_json)
     except Exception:
-        raise RuntimeError("LZT_COOKIES_JSON must be valid JSON exported from Cookie-Editor")
+        raise RuntimeError("LZT_COOKIES_JSON must be valid JSON from Cookie-Editor")
 
     s = requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "ru,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml",
-        "Referer": "https://zelenka.guru/"
-    })
+    s.headers.update({"User-Agent": UA})
+
+    # Cookie-Editor обычно отдаёт список объектов {name,value,domain,path,...}
     if isinstance(cookies, list):
         for c in cookies:
             if isinstance(c, dict) and "name" in c and "value" in c:
@@ -47,20 +51,13 @@ def _session_with_cookies():
     elif isinstance(cookies, dict):
         for k, v in cookies.items():
             s.cookies.set(k, v)
+
     return s
 
-# Чуть шире регекс — поддержим «ёлочки», варианты формулировок и цену с/без $.
-PATTERN = re.compile(
-    r'По вашей\s*(?:реферальной|рекламной|партн[её]рской)?\s*ссылке\s*[«"“]([^"»”]+)[»"”]\s*'
-    r'(?:был[аио]? )?куплен[ао]?\s*(?:аккаунт|уч[её]тн(?:ая|ую) запись)\s*(.+?)\s*за\s*\$?\s*([\d\.,]+)\s*\$?',
-    re.I | re.S
-)
-
 def _extract_texts_from_html(html: str):
-    html = re.sub(r'<script.*?</script>|<style.*?</style>', '', html, flags=re.S)
-    text = re.sub(r'<[^>]+>', ' ', html)
+    html_noscript = re.sub(r'<script.*?</script>|<style.*?</style>', '', html, flags=re.S)
+    text = re.sub(r'<[^>]+>', ' ', html_noscript)
     text = re.sub(r'\s+', ' ', text)
-
     out = []
     for m in PATTERN.finditer(text):
         game, acc, price = m.groups()
@@ -69,7 +66,7 @@ def _extract_texts_from_html(html: str):
 
 def poll_new_texts():
     s = _session_with_cookies()
-    r = s.get(ALERTS_URL, timeout=25)
+    r = s.get(ALERTS_URL, timeout=25, allow_redirects=True)
     r.raise_for_status()
     texts = _extract_texts_from_html(r.text)
 
@@ -84,19 +81,26 @@ def poll_new_texts():
         _save_seen(seen)
     return new
 
-# --- ОТЛАДКА ---
-def scraper_debug():
+# Диагностика: посмотреть, что реально приходит со страницы
+def debug_probe():
     s = _session_with_cookies()
-    r = s.get(ALERTS_URL, timeout=25)
-    html = r.text
-    texts = _extract_texts_from_html(html)
-    flat = re.sub(r'\s+', ' ', html)  # без переводов строк
+    r = s.get(ALERTS_URL, timeout=25, allow_redirects=True)
+    body = r.text or ""
+    plain = re.sub(r'<script.*?</script>|<style.*?</style>', '', body, flags=re.S)
+    plain = re.sub(r'<[^>]+>', ' ', plain)
+    plain = re.sub(r'\s+', ' ', plain)
+
+    matches = PATTERN.findall(plain)
+    logged_in_guess = ("Выйти" in body) or ("logout" in body.lower()) or ("account/alerts" in r.url)
+    js_challenge = ("/_dfjs/" in body) or ("Please enable JavaScript" in body)
+
     return {
-        "status": r.status_code,
         "url": r.url,
-        "len": len(html),
-        "logged_in_guess": ("Войти" not in flat and "login" not in r.url.lower()),
-        "found_matches": len(texts),
-        "examples": texts[:5],
-        "snippet": flat[:700]
+        "status": r.status_code,
+        "len": len(body),
+        "logged_in_guess": logged_in_guess,
+        "js_challenge": js_challenge,
+        "found_matches": len(matches),
+        "examples": [f'По вашей ссылке "{g}" куплен аккаунт {a} за ${p}' for (g,a,p) in matches[:3]],
+        "snippet": body[:400]
     }
