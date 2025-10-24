@@ -132,7 +132,13 @@ def llz_hook():
     asyncio.run(_work())
     return "OK", 200
 
-
+@app.get("/scraper_debug")
+def scraper_debug_route():
+    if request.args.get("secret") != os.getenv("CRON_SECRET"):
+        return "forbidden", 403
+    from lzt_scraper import scraper_debug
+    return jsonify(scraper_debug())
+    
 @app.route("/poll", methods=["GET"])
 def poll():
     if request.args.get("secret") != os.getenv("CRON_SECRET"):
