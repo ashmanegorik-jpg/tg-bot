@@ -4,3 +4,4 @@ Flask==2.3.3
 gunicorn==21.2.0
 playwright
 requests>=2.31.0,<3
+brotli
