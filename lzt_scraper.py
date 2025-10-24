@@ -26,6 +26,18 @@ def _save_seen(seen: set):
     except Exception:
         pass
 
+# --------- декодер ответа (brotli) ----------
+def _decode_response_text(r):
+    enc = (r.headers.get("Content-Encoding") or "").lower()
+    if enc == "br":
+        try:
+            import brotli
+            return brotli.decompress(r.content).decode("utf-8", "replace")
+        except Exception:
+            # если нет brotli — пробуем как есть
+            return r.text or r.content.decode("utf-8", "replace")
+    return r.text or r.content.decode("utf-8", "replace")
+
 # --------- cookies + session ----------
 def _session_with_cookies():
     cookies_json = (
@@ -42,15 +54,14 @@ def _session_with_cookies():
         raise RuntimeError("LZT_COOKIES_JSON must be valid JSON from Cookie-Editor")
 
     s = requests.Session()
-    # Похожий на браузер набор заголовков
     s.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate",  # ← убрали br
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Connection": "keep-alive",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Connection": "keep-alive",
     })
 
     # Cookie-Editor обычно отдаёт список объектов {name,value,domain,path,...}
@@ -61,7 +72,6 @@ def _session_with_cookies():
                     c["name"], c["value"],
                     domain=c.get("domain"),
                     path=c.get("path", "/"),
-                    secure=c.get("secure", True),
                 )
     elif isinstance(cookies, dict):
         # на случай, если экспорт в виде словаря name->value
@@ -96,13 +106,13 @@ def _looks_like_js_challenge(html: str) -> bool:
     return (
         '/_dfjs/' in h
         or 'please enable javascript and cookies' in h
-        or 'document.addEventListener(\'DOMContentLoaded\'' in h
+        or "document.addEventListener('DOMContentLoaded'" in h
     )
 
 def fetch_alerts_html():
     """
     Пытаемся открыть один из доменов.
-    Возвращает dict:
+    Возвращает dict (для /probe):
       {
         "ok": True/False,
         "url": "...",
@@ -120,9 +130,9 @@ def fetch_alerts_html():
         try:
             r = s.get(url, timeout=25, allow_redirects=True)
             status = r.status_code
-            html = r.text or ""
+            html = _decode_response_text(r) or ""
             js_ch = _looks_like_js_challenge(html)
-            # “угадать”, что мы залогинены (по наличию xf_user в куки и статуса 200)
+            # “угадать”, что залогинены (по наличию xf_user в куки и статусу 200)
             logged_guess = ("xf_user" in s.cookies.get_dict()) and (status == 200)
             info = {
                 "ok": (status == 200) and not js_ch,
@@ -146,7 +156,11 @@ def fetch_alerts_html():
                 "snippet": str(e),
                 "html": "",
             }
-    return last_info or {"ok": False, "url": "", "status": 0, "js_challenge": False, "logged_in_guess": False, "snippet": "", "html": ""}
+    return last_info or {
+        "ok": False, "url": "", "status": 0,
+        "js_challenge": False, "logged_in_guess": False,
+        "snippet": "", "html": ""
+    }
 
 # --------- публичные функции ----------
 def poll_new_texts():
@@ -156,7 +170,6 @@ def poll_new_texts():
     """
     info = fetch_alerts_html()
     if not info["ok"]:
-        # Пусть вызывающая сторона покажет это как есть в /probe
         if info.get("js_challenge"):
             raise RuntimeError("JS challenge page (anti-bot). Проверь cookies и домен (zelenka.guru/lolz.guru).")
         raise RuntimeError(f"Fetch failed: status={info.get('status')} url={info.get('url')}")
