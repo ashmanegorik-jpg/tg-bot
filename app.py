@@ -378,7 +378,14 @@ def poll():
     asyncio.run(_send())
     return jsonify({"ok": True, "delivered": len(new_texts)})
 
-
+@app.get("/probe")
+def probe():
+    # защита секретом
+    if request.args.get("secret") != os.getenv("CRON_SECRET"):
+        return "forbidden", 403
+    from lzt_scraper import debug_probe
+    res = debug_probe()
+    return jsonify(res)
 # ---------- Диагностика скрапера ----------
 @app.get("/scraper_debug_open")
 def scraper_debug_open():
