@@ -34,26 +34,29 @@ def _session_with_cookies():
         raise RuntimeError("LZT_COOKIES_JSON must be valid JSON exported from Cookie-Editor")
 
     s = requests.Session()
-    s.headers.update({"User-Agent": "Mozilla/5.0"})
-    # Cookie-Editor обычно отдаёт список объектов {name,value,domain,path,...}
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "ru,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml",
+        "Referer": "https://zelenka.guru/"
+    })
     if isinstance(cookies, list):
         for c in cookies:
             if isinstance(c, dict) and "name" in c and "value" in c:
                 s.cookies.set(c["name"], c["value"], domain=c.get("domain"), path=c.get("path", "/"))
     elif isinstance(cookies, dict):
-        # на случай словаря name->value
         for k, v in cookies.items():
             s.cookies.set(k, v)
     return s
 
-# Ищем текст вида: По вашей ссылке "GTA 5" куплен аккаунт ... за $5.53
+# Чуть шире регекс — поддержим «ёлочки», варианты формулировок и цену с/без $.
 PATTERN = re.compile(
-    r'По вашей ссылке\s*["“]([^"”]+)["”]\s*куплен аккаунт\s*(.+?)\s*за\s*(?:\$\s*)?([\d\.,]+)',
+    r'По вашей\s*(?:реферальной|рекламной|партн[её]рской)?\s*ссылке\s*[«"“]([^"»”]+)[»"”]\s*'
+    r'(?:был[аио]? )?куплен[ао]?\s*(?:аккаунт|уч[её]тн(?:ая|ую) запись)\s*(.+?)\s*за\s*\$?\s*([\d\.,]+)\s*\$?',
     re.I | re.S
 )
 
 def _extract_texts_from_html(html: str):
-    # грубо уберём теги, чтобы остался сплошной текст
     html = re.sub(r'<script.*?</script>|<style.*?</style>', '', html, flags=re.S)
     text = re.sub(r'<[^>]+>', ' ', html)
     text = re.sub(r'\s+', ' ', text)
@@ -80,3 +83,20 @@ def poll_new_texts():
     if new:
         _save_seen(seen)
     return new
+
+# --- ОТЛАДКА ---
+def scraper_debug():
+    s = _session_with_cookies()
+    r = s.get(ALERTS_URL, timeout=25)
+    html = r.text
+    texts = _extract_texts_from_html(html)
+    flat = re.sub(r'\s+', ' ', html)  # без переводов строк
+    return {
+        "status": r.status_code,
+        "url": r.url,
+        "len": len(html),
+        "logged_in_guess": ("Войти" not in flat and "login" not in r.url.lower()),
+        "found_matches": len(texts),
+        "examples": texts[:5],
+        "snippet": flat[:700]
+    }
