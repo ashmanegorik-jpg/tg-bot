@@ -2,15 +2,8 @@
 import os, json, re, hashlib
 import requests
 
-ALERTS_URL = os.getenv("LZT_ALERTS_URL", "https://zelenka.guru/account/alerts")
+ALERTS_URL = os.getenv("LZT_ALERTS_URL", "https://lolz.live/account/alerts")
 STATE_PATH = os.path.join(os.path.dirname(__file__), "alerts_state.json")
-UA = os.getenv("LZT_UA", "Mozilla/5.0")
-
-# Ищем текст: По вашей ссылке "GTA 5" куплен аккаунт ... за $5.53
-PATTERN = re.compile(
-    r'По вашей ссылке\s*["“]([^"”]+)["”]\s*куплен аккаунт\s*(.+?)\s*за\s*(?:\$\s*)?([\d\.,]+)',
-    re.I | re.S
-)
 
 def _load_seen():
     try:
@@ -27,22 +20,22 @@ def _save_seen(seen: set):
         pass
 
 def _session_with_cookies():
-    cookies_json = (
-        os.getenv("LZT_COOKIES_JSON")
-        or os.getenv("LOLZ_COOKIES_JSON")
-        or ""
-    )
+    cookies_json = os.getenv("LZT_COOKIES_JSON") or os.getenv("LOLZ_COOKIES_JSON") or ""
     if not cookies_json:
         raise RuntimeError("Set LZT_COOKIES_JSON (or LOLZ_COOKIES_JSON) in env")
-
     try:
         cookies = json.loads(cookies_json)
     except Exception:
-        raise RuntimeError("LZT_COOKIES_JSON must be valid JSON from Cookie-Editor")
+        raise RuntimeError("LZT_COOKIES_JSON must be valid JSON exported by Cookie-Editor")
 
     s = requests.Session()
-    s.headers.update({"User-Agent": UA})
-
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept-Language": "ru,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://lolz.live/",
+    })
     # Cookie-Editor обычно отдаёт список объектов {name,value,domain,path,...}
     if isinstance(cookies, list):
         for c in cookies:
@@ -51,13 +44,21 @@ def _session_with_cookies():
     elif isinstance(cookies, dict):
         for k, v in cookies.items():
             s.cookies.set(k, v)
-
     return s
 
+# Ищем текст вида: По вашей ссылке "GTA 5" куплен аккаунт ... за $5.53
+PATTERN = re.compile(
+    r'По вашей\s+ссылке\s*[«"“]?([^"”»]+)["”»]?\s*куплен[а-я\s]*аккаунт\s*(.+?)\s*за\s*(?:\$?\s*)([\d\.,]+)\s*\$?',
+    re.I | re.S
+)
+
+def _clean_html(html: str) -> str:
+    html = re.sub(r'<script.*?</script>|<style.*?</style>', '', html, flags=re.S)
+    text = re.sub(r'<[^>]+>', ' ', html)
+    return re.sub(r'\s+', ' ', text).strip()
+
 def _extract_texts_from_html(html: str):
-    html_noscript = re.sub(r'<script.*?</script>|<style.*?</style>', '', html, flags=re.S)
-    text = re.sub(r'<[^>]+>', ' ', html_noscript)
-    text = re.sub(r'\s+', ' ', text)
+    text = _clean_html(html)
     out = []
     for m in PATTERN.finditer(text):
         game, acc, price = m.groups()
@@ -66,9 +67,32 @@ def _extract_texts_from_html(html: str):
 
 def poll_new_texts():
     s = _session_with_cookies()
-    r = s.get(ALERTS_URL, timeout=25, allow_redirects=True)
-    r.raise_for_status()
-    texts = _extract_texts_from_html(r.text)
+
+    # Сначала пытаемся получить JSON (AJAX-представление XenForo)
+    r = s.get(ALERTS_URL, params={"_xfResponseType": "json"},
+              headers={"X-Requested-With": "XMLHttpRequest"}, timeout=25)
+
+    html = ""
+    ct = r.headers.get("Content-Type", "")
+    if "application/json" in ct:
+        try:
+            j = r.json()
+            # У разных сборок XenForo html может лежать по-разному
+            html = (
+                (j.get("html") or {}).get("content") or
+                j.get("html") or
+                j.get("page") or
+                ""
+            )
+        except Exception:
+            html = ""
+    if not html:
+        # Фоллбек — обычная страница
+        r = s.get(ALERTS_URL, timeout=25)
+        r.raise_for_status()
+        html = r.text
+
+    texts = _extract_texts_from_html(html)
 
     seen = _load_seen()
     new = []
@@ -80,27 +104,3 @@ def poll_new_texts():
     if new:
         _save_seen(seen)
     return new
-
-# Диагностика: посмотреть, что реально приходит со страницы
-def debug_probe():
-    s = _session_with_cookies()
-    r = s.get(ALERTS_URL, timeout=25, allow_redirects=True)
-    body = r.text or ""
-    plain = re.sub(r'<script.*?</script>|<style.*?</style>', '', body, flags=re.S)
-    plain = re.sub(r'<[^>]+>', ' ', plain)
-    plain = re.sub(r'\s+', ' ', plain)
-
-    matches = PATTERN.findall(plain)
-    logged_in_guess = ("Выйти" in body) or ("logout" in body.lower()) or ("account/alerts" in r.url)
-    js_challenge = ("/_dfjs/" in body) or ("Please enable JavaScript" in body)
-
-    return {
-        "url": r.url,
-        "status": r.status_code,
-        "len": len(body),
-        "logged_in_guess": logged_in_guess,
-        "js_challenge": js_challenge,
-        "found_matches": len(matches),
-        "examples": [f'По вашей ссылке "{g}" куплен аккаунт {a} за ${p}' for (g,a,p) in matches[:3]],
-        "snippet": body[:400]
-    }
