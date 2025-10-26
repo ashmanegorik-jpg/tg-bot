@@ -203,7 +203,7 @@ def apply_psychological_ending(amount, ending=PRICE_ENDING):
 
     if ending in (".99", ".49"):
         end = Decimal(ending)
-        int_part = int(d)
+        int_part = int(d)  # целая часть вниз
         candidate = Decimal(int_part) + end
         if candidate < d:
             candidate = Decimal(int_part + 1) + end
@@ -515,11 +515,11 @@ async def handle_custom_profit_value(message: types.Message):
     st = USER_STATE.get(message.from_user.id)
     if not st:
         return
-    nid = st["nid"]
 
+    nid = st["nid"]
     text = (message.text or "").strip()
     try:
-        target = float(text.replace(",", "."))
+        target = float(to_decimal(text))
     except Exception:
         await message.answer("Не понял число. Введите, например: 1.5")
         return
@@ -537,13 +537,11 @@ async def handle_custom_profit_value(message: types.Message):
     row["min_sale_for_target"] = f"{min_sale:.2f}"
     write_rows(rows)
 
-    # ...
-desc = auto_desc_for_game(row["game"], row.get("account_desc", ""))
-save_description_for_game(row["game"], desc)
-# (по желанию — запомним шаблон в «памяти»)
-save_description_for_game(row["game"], desc)
-listing_text = compose_listing(row, nid, target, min_sale, desc)
-# ...
+    # Авто-описание по игре
+    desc = auto_desc_for_game(row["game"], row.get("account_desc", ""))
+    save_description_for_game(row["game"], desc)
+
+    listing_text = compose_listing(row, nid, target, min_sale, desc)
 
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
@@ -565,7 +563,6 @@ listing_text = compose_listing(row, nid, target, min_sale, desc)
     content_types=types.ContentType.TEXT,
 )
 async def handle_text(message: types.Message):
-    ...
     text = message.text.strip()
     if text.startswith("/"):
         return
@@ -677,7 +674,8 @@ async def cb_profit(call: types.CallbackQuery):
     write_rows(rows)
 
     # Текст описания теперь всегда = название игры (alias подставится в compose_listing)
-    desc = row["game"]
+    desc = auto_desc_for_game(row["game"], row.get("account_desc", ""))
+    save_description_for_game(row["game"], desc)
     listing_text = compose_listing(row, nid, target, min_sale, desc)
 
     kb = InlineKeyboardMarkup()
