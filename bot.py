@@ -347,24 +347,23 @@ async def cmd_add_buy(message: types.Message):
 @dp.message_handler(commands=["list"])
 async def cmd_list(message: types.Message):
     rows = read_rows()
-    in_stock = [r for r in rows if r.get("status") in ("in_stock", "listed")]
-    if not in_stock:
-        await message.answer("Нет лотов в наличии.")
+    listed = [r for r in rows if r.get("status") == "listed"]
+
+    if not listed:
+        await message.answer("Пока нет опубликованных лотов.")
         return
 
-    lines = []
-    for r in in_stock:
+    lines = ["📌 Опубликованные лоты:"]
+    for r in listed:
         alias = (r.get("alias") or "").lower()
-        display_desc = f"{alias} | {r['game']}" if alias else r['game']
-
+        title = f"{alias} | {r['game']}" if alias else r['game']
         sale = (r.get("min_sale_for_target") or "").strip()
+        line = f'ID {r["id"]} — {title}'
         if sale:
-            lines.append(f'ID {r["id"]} — {display_desc} — {sale}$')
-        else:
-            lines.append(f'ID {r["id"]} — {display_desc}')
+            line += f" — {sale}$"
+        lines.append(line)
 
-    await message.answer("Лоты в наличии:\n" + "\n".join(lines))
-
+    await message.answer("\n".join(lines))
 @dp.message_handler(lambda m: (m.text is not None) and m.chat.id in WAITING_DESC, content_types=types.ContentType.TEXT)
 async def receive_description(message: types.Message):
     ctx = WAITING_DESC.pop(message.chat.id, None)
