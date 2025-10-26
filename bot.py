@@ -278,7 +278,28 @@ def parse_notification(text: str):
         "buy_price": buy_price,
         "source_text": text
     }
+# --- Авто-описание по игре ---
+def auto_desc_for_game(game: str, account_desc: str = "") -> str:
+    """
+    Возвращает шаблон описания в зависимости от игры.
+    Alias (3 буквы) добавляется автоматически в compose_listing().
+    """
+    t = f"{game} {account_desc}".lower()
 
+    # CS2 / Counter-Strike 2
+    if ("cs2" in t) or ("counter-strike 2" in t) or ("counter strike 2" in t):
+        return "CS2 PRIME | ПОЛНЫЙ ДОСТУП | МОЖНО СМЕНИТЬ ПОЧТУ"
+
+    # Dead by Daylight
+    if ("dead by daylight" in t) or ("dbd" in t):
+        return "DEAD BY DAYLIGHT | HOURS"
+
+    # GTA 5 (любые вариации)
+    if ("gta 5" in t) or ("gta v" in t) or ("grand theft auto v" in t):
+        return "GTA 5 | 0 HOURS | СОШИАЛ МОЖНО ПРИВЯЗАТЬ САМОМУ"
+
+    # По умолчанию — просто название игры капсом
+    return (game or "").upper()
 # ---- Команды/Handlers ----
 @dp.message_handler(commands=["start", "help"])
 async def cmd_start(message: types.Message):
@@ -516,8 +537,13 @@ async def handle_custom_profit_value(message: types.Message):
     row["min_sale_for_target"] = f"{min_sale:.2f}"
     write_rows(rows)
 
-    desc = row["game"]  # без ввода описания — просто название игры
-    listing_text = compose_listing(row, nid, target, min_sale, desc)
+    # ...
+desc = auto_desc_for_game(row["game"], row.get("account_desc", ""))
+save_description_for_game(row["game"], desc)
+# (по желанию — запомним шаблон в «памяти»)
+save_description_for_game(row["game"], desc)
+listing_text = compose_listing(row, nid, target, min_sale, desc)
+# ...
 
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
@@ -616,7 +642,7 @@ async def cmd_generate_listing(message: types.Message):
     min_sale = apply_psychological_ending(
         calc_min_sale(float(row["buy_price"]), target_net=target_f)
     )
-    desc_default = row["game"]  # <— только название игры
+    desc_default = auto_desc_for_game(row["game"], row.get("account_desc", ""))
     txt = compose_listing(row, nid, target_f, min_sale, desc_default)
     await message.answer(txt)
    
