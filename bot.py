@@ -296,7 +296,8 @@ def auto_desc_for_game(game: str, account_desc: str = "") -> str:
 
     # GTA 5 (любые вариации)
     if ("gta 5" in t) or ("gta v" in t) or ("grand theft auto v" in t):
-        return "GTA 5 | 0 HOURS | СОШИАЛ МОЖНО ПРИВЯЗАТЬ САМОМУ"
+    name = (game or "GTA 5")  # берём оригинальное написание из уведомления
+    return f"{name} | 0 HOURS | СОШИАЛ МОЖНО ПРИВЯЗАТЬ САМОМУ"
 
     # По умолчанию — просто название игры капсом
     return (game or "").upper()
