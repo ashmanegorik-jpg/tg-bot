@@ -689,18 +689,37 @@ async def cb_profit(call: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("posted:"))
 async def cb_posted(call: types.CallbackQuery):
     _, nid = call.data.split(":", 1)
+    nid = str(nid).strip()
+
+    # Пытаемся вытащить alias из текста сообщения:
+    # он у нас в блоке "Описание для лота:\nabc | ..."
+    alias = None
+    if call.message and call.message.text:
+        m = re.search(r"Описание для лота:\s*([\da-zA-Z]{3})\s*\|", call.message.text)
+        if m:
+            alias = m.group(1).lower()
 
     async with FILE_LOCK:
         rows = read_rows()
-        row = next((r for r in rows if r["id"] == str(nid)), None)
+
+        # Сначала ищем ТОЛЬКО точное совпадение id+alias
+        row = None
+        if alias:
+            for r in rows:
+                if r.get("id") == nid and (r.get("alias") or "").lower() == alias:
+                    row = r
+                    break
+
+        # Фолбэк: если alias не нашли, ищем по одному id (как раньше)
+        if not row:
+            row = next((r for r in rows if r.get("id") == nid), None)
+
         if not row:
             await call.answer("Лот не найден.", show_alert=True)
             return
 
         row["status"] = "listed"
-        notes = (row.get("notes") or "").strip()
-        if "lolz_id=" not in notes:
-            row["notes"] = notes  # оставляем как есть; храним только локальный статус
+        # никаких массовых правок других строк!
         write_rows(rows)
 
     await call.message.answer(f"✅ Лот {nid} помечен как опубликованный (локально).")
