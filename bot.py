@@ -280,26 +280,22 @@ def parse_notification(text: str):
     }
 # --- Авто-описание по игре ---
 def auto_desc_for_game(game: str, account_desc: str = "") -> str:
-    """
-    Возвращает шаблон описания в зависимости от игры.
-    Alias (3 буквы) добавляется автоматически в compose_listing().
-    """
     t = f"{game} {account_desc}".lower()
 
-    # CS2 / Counter-Strike 2
+    # CS2
     if ("cs2" in t) or ("counter-strike 2" in t) or ("counter strike 2" in t):
         return "CS2 PRIME | ПОЛНЫЙ ДОСТУП | МОЖНО СМЕНИТЬ ПОЧТУ"
 
-    # Dead by Daylight
+    # DBD
     if ("dead by daylight" in t) or ("dbd" in t):
         return "DEAD BY DAYLIGHT | HOURS"
 
-    # GTA 5 (любые вариации)
+    # GTA: сохраняем оригинальное написание из уведомления
     if ("gta 5" in t) or ("gta v" in t) or ("grand theft auto v" in t):
-    name = (game or "GTA 5")  # берём оригинальное написание из уведомления
-    return f"{name} | 0 HOURS | СОШИАЛ МОЖНО ПРИВЯЗАТЬ САМОМУ"
+        name = (game or "GTA 5").strip()
+        return f"{name} | 0 HOURS | СОШИАЛ МОЖНО ПРИВЯЗАТЬ САМОМУ"
 
-    # По умолчанию — просто название игры капсом
+    # По умолчанию — капсом
     return (game or "").upper()
 # ---- Команды/Handlers ----
 @dp.message_handler(commands=["start", "help"])
