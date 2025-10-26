@@ -393,9 +393,10 @@ async def receive_description(message: types.Message):
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"editdesc:{nid}"))
     kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
-    )
+    InlineKeyboardButton("Отметить опубликованным",
+                         callback_data=f"posted:{nid}:{(row.get('alias') or '').lower()}"),
+    InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
+)
     kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
 # 3.1. Пользователь вводит описание для кастомного профита
@@ -455,9 +456,10 @@ async def wait_custom_profit(message: types.Message):
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
     kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-    )
+    InlineKeyboardButton("Отметить опубликованным",
+                         callback_data=f"posted:{nid}:{(row.get('alias') or '').lower()}"),
+    InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
+)
     kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
@@ -498,9 +500,10 @@ async def wait_fixed_desc(message: types.Message):
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
     kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-    )
+    InlineKeyboardButton("Отметить опубликованным",
+                         callback_data=f"posted:{nid}:{(row.get('alias') or '').lower()}"),
+    InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
+)
     kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     await message.answer(listing_text, reply_markup=kb)
     USER_STATE.pop(message.from_user.id, None)
@@ -543,9 +546,10 @@ async def handle_custom_profit_value(message: types.Message):
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
     kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-    )
+    InlineKeyboardButton("Отметить опубликованным",
+                         callback_data=f"posted:{nid}:{(row.get('alias') or '').lower()}"),
+    InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
+)
     kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
 
     USER_STATE.pop(message.from_user.id, None)
@@ -599,8 +603,9 @@ async def handle_text(message: types.Message):
     )
     kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
     kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    InlineKeyboardButton("Отметить опубликованным",
+                         callback_data=f"posted:{nid}:{alias}"),
+    InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
     )
 
     draft_text = (
@@ -678,9 +683,10 @@ async def cb_profit(call: types.CallbackQuery):
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
     kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-    )
+    InlineKeyboardButton("Отметить опубликованным",
+                         callback_data=f"posted:{nid}:{(row.get('alias') or '').lower()}"),
+    InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
+)
     kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
 
     await call.message.answer(listing_text, reply_markup=kb)
@@ -688,30 +694,29 @@ async def cb_profit(call: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("posted:"))
 async def cb_posted(call: types.CallbackQuery):
-    _, nid = call.data.split(":", 1)
-    nid = str(nid).strip()
+    parts = call.data.split(":")
+    # варианты: ["posted", nid] (старые кнопки) или ["posted", nid, alias] (новые)
+    if len(parts) == 3:
+        _, nid, alias = parts
+        alias = (alias or "").lower().strip()
+    else:
+        _, nid = parts
+        alias = None
 
-    # Пытаемся вытащить alias из текста сообщения:
-    # он у нас в блоке "Описание для лота:\nabc | ..."
-    alias = None
-    if call.message and call.message.text:
-        m = re.search(r"Описание для лота:\s*([\da-zA-Z]{3})\s*\|", call.message.text)
-        if m:
-            alias = m.group(1).lower()
+    nid = str(nid).strip()
 
     async with FILE_LOCK:
         rows = read_rows()
 
-        # Сначала ищем ТОЛЬКО точное совпадение id+alias
         row = None
         if alias:
+            # Жёстко по паре id+alias
             for r in rows:
                 if r.get("id") == nid and (r.get("alias") or "").lower() == alias:
                     row = r
                     break
-
-        # Фолбэк: если alias не нашли, ищем по одному id (как раньше)
-        if not row:
+        else:
+            # Фолбэк для старых сообщений без alias
             row = next((r for r in rows if r.get("id") == nid), None)
 
         if not row:
@@ -719,10 +724,9 @@ async def cb_posted(call: types.CallbackQuery):
             return
 
         row["status"] = "listed"
-        # никаких массовых правок других строк!
         write_rows(rows)
 
-    await call.message.answer(f"✅ Лот {nid} помечен как опубликованный (локально).")
+    await call.message.answer(f"✅ Лот {nid} помечен как опубликованный (alias: {(row.get('alias') or '').lower()}).")
     await call.answer()
 
     
@@ -826,9 +830,10 @@ async def handle_edit_desc(message: types.Message):
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Изменить текст", callback_data=f"edit_desc:{nid}:{target}"))
     kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
-    )
+    InlineKeyboardButton("Отметить опубликованным",
+                         callback_data=f"posted:{nid}:{(row.get('alias') or '').lower()}"),
+    InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
+)
     kb.add(InlineKeyboardButton("Восстановлен", callback_data=f"restored:{nid}"))
     
     await message.answer(listing_text, reply_markup=kb)
@@ -1003,8 +1008,9 @@ async def create_lot_and_prompt(parsed: dict, chat_id: int):
     )
     kb.add(InlineKeyboardButton("Custom", callback_data=f"profit:{nid}:custom"))
     kb.add(
-        InlineKeyboardButton("Отметить опубликованным", callback_data=f"posted:{nid}"),
-        InlineKeyboardButton("Отметить проданным",      callback_data=f"sold_direct:{nid}")
+    InlineKeyboardButton("Отметить опубликованным",
+                         callback_data=f"posted:{nid}:{alias}"),
+    InlineKeyboardButton("Отметить проданным", callback_data=f"sold_direct:{nid}")
     )
 
     draft_text = (
