@@ -929,16 +929,16 @@ async def cmd_stats(message: types.Message):
     bought_count = len(rows)
     total_spent = sum(float(r["buy_price"]) for r in rows if r.get("buy_price"))
 
-    sold = [r for r in rows if r["status"] == "sold" and r.get("net_profit")]
+    sold = [r for r in rows if r.get("status") == "sold" and r.get("net_profit")]
     sold_count = len(sold)
-    total_net_sales = sum(float(r["net_profit"]) for r in sold) if sold else 0.0  # чистая прибыль с продаж
+    total_profit = sum(float(r["net_profit"]) for r in sold) if sold else 0.0  # ← Прибыль с проданных
 
-    restored = [r for r in rows if r["status"] == "restored"]
+    restored = [r for r in rows if r.get("status") == "restored"]
     restored_count = len(restored)
-    total_losses = sum(float(r["buy_price"]) for r in restored)  # потери = цена покупки
+    total_losses = sum(float(r["buy_price"]) for r in restored)  # Потери = цена покупки восстановленных
 
-    # Итоговый финансовый результат = прибыль с продаж - потери от восстановленных
-    real_result = total_net_sales - total_losses
+    # Итоговый результат = прибыль с продаж - потери от восстановленных
+    real_result = total_profit - total_losses
 
     text = (
         "Статистика:\n"
@@ -946,6 +946,7 @@ async def cmd_stats(message: types.Message):
         f"Продано: {sold_count}\n"
         f"Восстановлено: {restored_count}\n"
         f"Потрачено всего: {total_spent:.2f}$\n"
+        f"Прибыль (проданное): {total_profit:.2f}$\n"          # ← ВОТ ЭТА СТРОКА
         f"Потери (восстановленные): {total_losses:.2f}$\n"
         f"ИТОГ (прибыль - потери): {real_result:.2f}$\n"
     )
