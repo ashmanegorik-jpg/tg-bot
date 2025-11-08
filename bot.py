@@ -5,6 +5,8 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import asyncio
 import random, string
+import psycopg2
+import psycopg2.extras
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 FILE_LOCK = asyncio.Lock()
@@ -18,7 +20,39 @@ if not API_TOKEN:
     raise RuntimeError("Environment variable BOT_TOKEN is not set")
 
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("Environment variable DATABASE_URL is not set")
 
+
+def get_conn():
+    # Render обычно требует sslmode=require
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
+
+
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS inventory (
+            id INTEGER PRIMARY KEY,
+            alias TEXT,
+            source_text TEXT,
+            game TEXT,
+            account_desc TEXT,
+            buy_price TEXT,
+            buy_date TEXT,
+            status TEXT,
+            min_sale_for_target TEXT,
+            notes TEXT,
+            sell_price TEXT,
+            sell_date TEXT,
+            net_profit TEXT
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
 # ====== HELP-текст и меню команд ======
 HELP_TEXT = (
     "Привет! Я бот для учёта и подготовки листингов.\n\n"
@@ -65,6 +99,7 @@ if not API_TOKEN:
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
+init_db()
 
 # Создаём CSV если его нет
 FIELDNAMES = [
@@ -124,28 +159,58 @@ def save_description_for_game(game: str, description: str):
         writer.writeheader()
         writer.writerows(rows)
 
-if not os.path.exists(DATA_CSV):
-    with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writeheader()
 
 # ---- Утилиты для CSV ----
+# ---- Утилиты для БД вместо CSV ----
 def read_rows():
-    with open(DATA_CSV, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+    """Считать все строки из таблицы inventory как list[dict]."""
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM inventory ORDER BY id ASC")
+    rows = [dict(r) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return rows
+
 
 def write_rows(rows):
-    with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(rows)
+    """
+    Полная перезапись таблицы inventory содержимым rows.
+    Это совместимо с твоей логикой:
+    - обычно: read_rows() -> что-то поменять -> write_rows(rows)
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM inventory")
+    for r in rows:
+        # гарантируем наличие всех ключей, чтобы INSERT не упал
+        for key in FIELDNAMES:
+            r.setdefault(key, "")
+
+        cur.execute("""
+            INSERT INTO inventory (
+                id, alias, source_text, game, account_desc,
+                buy_price, buy_date, status, min_sale_for_target,
+                notes, sell_price, sell_date, net_profit
+            ) VALUES (
+                %(id)s, %(alias)s, %(source_text)s, %(game)s, %(account_desc)s,
+                %(buy_price)s, %(buy_date)s, %(status)s, %(min_sale_for_target)s,
+                %(notes)s, %(sell_price)s, %(sell_date)s, %(net_profit)s
+            )
+        """, r)
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 def reset_csv():
-    """Перезаписывает inventory.csv, оставляя только заголовок."""
-    with open(DATA_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writeheader()
+    """Теперь просто очищаем таблицу inventory в базе."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM inventory")
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 def next_id(rows):
