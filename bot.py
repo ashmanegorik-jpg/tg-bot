@@ -163,11 +163,21 @@ def save_description_for_game(game: str, description: str):
 # ---- Утилиты для CSV ----
 # ---- Утилиты для БД вместо CSV ----
 def read_rows():
-    """Считать все строки из таблицы inventory как list[dict]."""
+    """Считать все строки из таблицы inventory как list[dict] + привести id к str."""
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("SELECT * FROM inventory ORDER BY id ASC")
-    rows = [dict(r) for r in cur.fetchall()]
+
+    rows = []
+    for r in cur.fetchall():
+        d = dict(r)
+        # id из INTEGER -> строка, как было в CSV-версии
+        if d.get("id") is not None:
+            d["id"] = str(d["id"])
+        else:
+            d["id"] = ""
+        rows.append(d)
+
     cur.close()
     conn.close()
     return rows
